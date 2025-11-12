@@ -1,0 +1,21 @@
+numpy
+scipy
+pandas
+scikit-learn
+matplotlib
+tqdm
+rich
+lit # Getting installation errors with torch 2.0 if this isn't installed
+# torchvision
+torch
+mamba-ssm
+pytorch-lightning==2.0.4
+hydra-core
+omegaconf
+wandb
+einops
+cmake # For pykeops support
+# pykeops # Seems to cause various issues; leaving uninstalled by default
+transformers # For some schedulers
+pyarrow
+polars
