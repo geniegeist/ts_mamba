@@ -16,6 +16,7 @@ from ts_mamba.split import temporal_train_val_split, spatiotemporal_subset
 from ts_mamba.optimizer import WarmupCosineLR 
 from ts_mamba.train_util import plot_forecast_vs_truth_rmse
 from ts_mamba.dataset import TileTimeSeriesDataset
+from ts_mamba.sampler import InfiniteRandomSampler
 
 
 from tqdm.auto import tqdm
@@ -32,7 +33,6 @@ parser.add_argument('--config', type=str, help='Path to YAML config file')
 # ----------------------------------------------------------------------
 parser.add_argument('--lr', type=float, default=0.01, help='Learning rate for non-S4 layers')
 parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay for optimizer (Adam)')
-parser.add_argument('--use_scheduler', action='store_true', help='Enable learning rate scheduler')
 parser.add_argument('--warm_restart', type=int, help='Enable learning rate scheduler')
 parser.add_argument('--warmup_steps', type=int, help='')
 parser.add_argument('--eta_min', type=float, default=0, help='Minimum learning rate for cosine annealing scheduler')
@@ -67,10 +67,10 @@ parser.add_argument('--val_split_date', type=str, default='2025-01-01', help='Va
 # Checkpointing & Logging
 # ----------------------------------------------------------------------
 parser.add_argument('--resume', action='store_true', help='Resume training from checkpoint')
+parser.add_argument('--resume_model_only', action='store_true', help='Resume training from checkpoint')
 parser.add_argument('--checkpoint_path', type=str, default='./checkpoints/ckpt.pth', help='Path to checkpoint file')
 parser.add_argument('--run', default="dummy", type=str, help='Run name for logging (e.g., wandb)')
-parser.add_argument('--wandb_resume_from', type=str, help='{run_id}?_step={step}')
-parser.add_argument('--start_epoch', type=int, default=0, help='Epoch to start with')
+parser.add_argument('--resume_from', type=str, help='run_id')
 
 # ----------------------------------------------------------------------
 # Features & Evaluation
@@ -119,7 +119,8 @@ use_dummy_wandb = args.run == "dummy"
 wandb_run = DummyWandb() if use_dummy_wandb else wandb.init(
     project="ts_mamba_rmse", 
     name=args.run, 
-    resume_from=args.wandb_resume_from if args.wandb_resume_from else None,
+    id=args.resume_from,
+    resume="must" if args.resume_from else None,
     config={ 
         "data": {"meta": meta}, 
         "args": args, 
@@ -133,7 +134,6 @@ wandb_run = DummyWandb() if use_dummy_wandb else wandb.init(
             "lr": args.lr,
             "weight_decay": args.weight_decay,
             "eta_min": args.eta_min,
-            "use_scheduler": args.use_scheduler,
             "total_steps": args.total_steps,
             "val_split_date": val_split_date,
         }
@@ -156,12 +156,7 @@ sample_dataset = TileTimeSeriesDataset(sample_df, meta, context_length=context_l
 
 # Dataloaders
 def get_train_loader():
-    print("Setting up train loader")
-    # Randomly select N unique indices
-    indices = torch.randperm(len(train_dataset))[:args.total_steps]
-    train_sampler = SubsetRandomSampler(indices)
-
-    return DataLoader(train_dataset, batch_size=args.batch_size, sampler=train_sampler, num_workers=args.num_workers)
+    return DataLoader(train_dataset, batch_size=args.batch_size, sampler=InfiniteRandomSampler(train_dataset), num_workers=args.num_workers)
 
 val_loader = DataLoader(
     val_dataset, batch_size=64, shuffle=False, num_workers=args.num_workers)
@@ -189,35 +184,49 @@ model = model.to(device)
 if device == 'cuda':
     cudnn.benchmark = True
 
+min_eval_loss = float("inf")
+best_step = -1
+start_step = 0
+samples_so_far = 0
+
 if args.resume:
     # Load checkpoint.
     print('==> Resuming from checkpoint..')
     checkpoint = torch.load(args.checkpoint_path)
-    model.load_state_dict(checkpoint['model'])
+    if args.resume_model_only:
+        model.load_state_dict(checkpoint['model'])
+    else:
+        model.load_state_dict(checkpoint['model'])
+        start_step = checkpoint['step']
+        samples_so_far = checkpoint['samples_so_far']
+        min_eval_loss = checkpoint['min_val_loss']
+        best_step = checkpoint['best_step']
 
 
 criterion = RMSELoss()
 optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-scheduler = WarmupCosineLR(optimizer, warmup_steps=args.warmup_steps, total_steps=len(train_loader))
+
+for param_group in optimizer.param_groups:
+    param_group.setdefault("initial_lr", args.lr)
+
+scheduler = WarmupCosineLR(optimizer, warmup_steps=args.warmup_steps, total_steps=args.total_steps, last_epoch=start_step-1)
 
 ###############################################################################
 # Everything after this point is standard PyTorch training!
 ###############################################################################
 
-wandb_run.watch(model, log="all")
+if not use_dummy_wandb:
+    wandb_run.watch(model, log="all")
 
 ema_beta = 0.9 # EMA decay factor
-min_eval_loss = float("inf")
-best_step = -1
-samples_so_far = 0
 smooth_train_loss = 0
 smooth_mae = 0
 
 print('==> Start training..')
-pbar = tqdm(enumerate(train_loader))
-
-for step, data in pbar:
-    last_step = step == len(train_loader) - 1
+pbar = tqdm(range(start_step, args.total_steps), desc="Training")
+for step in pbar:
+    batch = next(iter(train_loader))
+    last_step = step == args.total_steps - 1
     samples_so_far += args.batch_size
     model.eval()
     # once in a while: evaluate model
@@ -257,7 +266,7 @@ for step, data in pbar:
     wandb_run.log({ "last_lr": scheduler.get_last_lr() })
     model.train()
 
-    obs, targets = data["context"], data["target"]
+    obs, targets = batch["context"], batch["target"]
     obs, targets = obs.to(device), targets.to(device)
 
     optimizer.zero_grad()
@@ -266,6 +275,9 @@ for step, data in pbar:
 
     loss = criterion(preds, targets)
     loss.backward()
+
+    optimizer.step()
+    scheduler.step()
 
     smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * loss.item() # EMA the training loss
     debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
@@ -276,10 +288,10 @@ for step, data in pbar:
 
     pbar.set_description(
         'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
-        (step, len(train_loader), debiased_smooth_loss, debiased_smooth_mae)
+        (step, args.total_steps, debiased_smooth_loss, debiased_smooth_mae)
     )
 
-    if step % 100 == 0:
+    if step % 10 == 0:
         wandb_run.log({
             "samples_so_far": samples_so_far,
             "train_loss": debiased_smooth_loss,
@@ -292,6 +304,8 @@ for step, data in pbar:
 
         state = {
             'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict(),
             'step': step,
             'samples_so_far': samples_so_far,
             "min_val_loss": min_eval_loss,
@@ -307,7 +321,5 @@ for step, data in pbar:
             artifact.add_file(ckpt_path)
             wandb_run.log_artifact(artifact)
 
-    optimizer.step()
-    scheduler.step()
 
 wandb_run.finish()
