@@ -1,0 +1,8 @@
+.DS_Store
+
+data/
+wandb/
+__pycache__/
+.idea
+configs/
+
