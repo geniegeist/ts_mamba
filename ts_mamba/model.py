@@ -84,6 +84,7 @@ class TimeseriesModel(nn.Module):
         ssm_cfg=None,
         attn_layer_idx=None,
         attn_cfg=None,
+        rms_norm: bool = False,
         norm_epsilon: float = 1e-5,
         device=None,
         dtype=None,
@@ -103,7 +104,7 @@ class TimeseriesModel(nn.Module):
                     attn_layer_idx=attn_layer_idx,
                     attn_cfg=attn_cfg,
                     norm_epsilon=norm_epsilon,
-                    rms_norm=False,
+                    rms_norm=rms_norm,
                     residual_in_fp32=True,
                     layer_idx=i,
                     **factory_kwargs,
@@ -112,7 +113,7 @@ class TimeseriesModel(nn.Module):
             ]
         )
 
-        self.norm_f = nn.LayerNorm(
+        self.norm_f = (nn.LayerNorm if not rms_norm else RMSNorm)(
             d_model, eps=norm_epsilon, **factory_kwargs
         )
 
@@ -154,5 +155,6 @@ class RMSELoss(nn.Module):
         super().__init__()
 
     def forward(self, preds, targets):
-        return torch.sqrt(torch.mean((preds[:,-1] - targets[:,-1]) ** 2))
+        #return torch.sqrt(torch.mean((preds[:,-1] - targets[:,-1]) ** 2))
+        return torch.sqrt(torch.mean((preds - targets) ** 2))
 
