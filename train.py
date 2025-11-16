@@ -9,6 +9,7 @@ from hydra.core.config_store import ConfigStore
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+from omegaconf import OmegaConf
 
 import wandb
 from config import Config
@@ -37,7 +38,7 @@ def main(config: Config):
             id = config.wandb.id,
             mode = config.wandb.mode,
             job_type = config.wandb.job_type,
-            config = config,
+            config=OmegaConf.to_container(config, resolve=True),
         )
     else:
         wandb_run = DummyWandb()
