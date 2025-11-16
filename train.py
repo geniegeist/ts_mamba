@@ -74,9 +74,9 @@ def main(config: Config):
     d_input = len(train_meta["features"])
     model = TimeseriesModel(
         d_input=d_input,
-        d_model=config.d_model,
-        d_intermediate=config.d_intermediate,
-        n_layers=config.n_layers,
+        d_model=config.model.d_model,
+        d_intermediate=config.model.d_intermediate,
+        n_layers=config.model.n_layers,
         ssm_cfg=config.model.ssm_cfg,
         attn_layer_idx=config.model.attn_layer_idx,
         attn_cfg=config.model.attn_cfg,
