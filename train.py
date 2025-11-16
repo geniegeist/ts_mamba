@@ -1,0 +1,210 @@
+import os
+
+import hydra
+import polars as pl
+import torch
+import torch.backends.cudnn as cudnn
+import yaml
+from hydra.core.config_store import ConfigStore
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
+
+import wandb
+from config import Config
+from ts_mamba.common import DummyWandb
+from ts_mamba.dataset import TileTimeSeriesDataset
+from ts_mamba.loss_eval import evaluate_model_rmse
+from ts_mamba.model import TimeseriesModel, RMSELoss
+from ts_mamba.optimizer import WarmupCosineLR 
+from ts_mamba.sampler import InfiniteRandomSampler
+from ts_mamba.train_util import plot_forecast_vs_truth_rmse
+
+
+config_store = ConfigStore.instance()
+config_store.store(name="timeseries_deep_learning_config", node=Config)
+
+@hydra.main(version_base="1.3", config_path="configs", config_name="config")
+def main(config: Config):
+    print(config.dataset.sampling)
+
+    use_wandb = config.wandb is not None
+    wandb_run = None
+    if use_wandb:
+        wandb_run = wandb.init(
+            project = config.wandb.project,
+            name = config.wandb.name,
+            id = config.wandb.id,
+            mode = config.wandb.mode,
+            job_type = config.wandb.job_type,
+            config = config,
+        )
+    else:
+        wandb_run = DummyWandb()
+
+    train_df = pl.read_parquet(config.dataset.train.data)
+    val_df = pl.read_parquet(config.dataset.validation.data)
+    sample_df = pl.read_parquet(config.dataset.sampling.data)
+
+    with open(config.dataset.train.meta, "r") as f:
+        train_meta = yaml.safe_load(f)
+
+    with open(config.dataset.validation.meta, "r") as f:
+        validation_meta = yaml.safe_load(f)
+
+    with open(config.dataset.sampling.meta, "r") as f:
+        sample_meta = yaml.safe_load(f)
+
+    context_length = 60 // train_meta["time_res"] * 24 * config.context_window_in_days
+
+    train_dataset = TileTimeSeriesDataset(train_df, train_meta, context_length)
+    val_dataset = TileTimeSeriesDataset(val_df, validation_meta, context_length)
+    sample_dataset = TileTimeSeriesDataset(sample_df, sample_meta, context_length)
+
+    def get_train_loader():
+        return DataLoader(train_dataset, batch_size=config.batch_size, sampler=InfiniteRandomSampler(train_dataset), num_workers=config.num_workers)
+
+    train_loader = get_train_loader()
+    val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=config.num_workers)
+    sample_loader = DataLoader(sample_dataset, batch_size=64, shuffle=False, num_workers=config.num_workers)
+
+    print('==> Building model..')
+
+    d_input = len(train_meta["features"])
+    model = TimeseriesModel(
+        d_input=d_input,
+        d_model=config.d_model,
+        d_intermediate=config.d_intermediate,
+        n_layers=config.n_layers,
+        device=config.device,
+    )
+    model = model.to(config.device)
+
+    if config.device == 'cuda':
+        cudnn.benchmark = True
+
+
+    min_eval_loss = float("inf")
+    best_step = -1
+    start_step = 0
+    samples_so_far = 0
+
+
+    criterion = RMSELoss()
+    optimizer = AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    scheduler = WarmupCosineLR(optimizer, warmup_steps=config.warmup_steps, total_steps=config.total_steps, last_epoch=start_step-1)
+
+    if not use_wandb:
+        wandb_run.watch(model, log="all")
+
+    ema_beta = 0.9 # EMA decay factor
+    smooth_train_loss = 0
+    smooth_mae = 0
+
+
+    print('==> Start training..')
+    pbar = tqdm(range(start_step, config.total_steps), desc="Training")
+    for step in pbar:
+        batch = next(iter(train_loader))
+        last_step = step == config.total_steps - 1
+        samples_so_far += config.batch_size
+        model.eval()
+        # once in a while: evaluate model
+        if last_step or step % config.eval_every == 0:
+            val_res = evaluate_model_rmse(
+                model=model,
+                criterion=criterion,
+                loader=val_loader,
+                device=config.device,
+            )
+
+            if val_res["loss"] < min_eval_loss:
+                min_eval_loss = val_res["loss"]
+                best_step = step
+
+            wandb_run.log({
+                "samples_so_far": samples_so_far,
+                "val_loss": val_res["loss"],
+                "val_mae": val_res["mae"],
+                "val_zero_mae": val_res["zero_mae"],
+                "val_pos_mae": val_res["pos_mae"],
+                "min_val_loss": min_eval_loss,
+                "best_step": best_step,
+            })
+
+        # once in a while: sample from model
+        if config is not None and config.sample_every > 0 and (last_step or (step % config.sample_every == 0)):
+            plot_forecast_vs_truth_rmse(
+                model=model,
+                loader=sample_loader,
+                device=config.device,
+                wandb_run=wandb_run,
+                epoch=step,
+            )
+
+        # Training
+        wandb_run.log({ "last_lr": scheduler.get_last_lr() })
+        model.train()
+
+        obs, targets = batch["context"], batch["target"]
+        obs, targets = obs.to(config.device), targets.to(config.device)
+
+        optimizer.zero_grad()
+
+        preds = model(obs)
+
+        loss = criterion(preds, targets)
+        loss.backward()
+
+        optimizer.step()
+        scheduler.step()
+
+        smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * loss.item() # EMA the training loss
+        debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
+
+        mae = torch.mean(torch.abs(preds[:,-1] - targets[:,-1]))
+        smooth_mae = ema_beta * smooth_mae + (1 - ema_beta) * mae.item() # EMA the training loss
+        debiased_smooth_mae = smooth_mae / (1 - ema_beta**(step + 1))
+
+        pbar.set_description(
+            'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
+            (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
+        )
+
+        if step % 10 == 0:
+            wandb_run.log({
+                "samples_so_far": samples_so_far,
+                "train_loss": debiased_smooth_loss,
+                "train_mae": debiased_smooth_mae,
+                "last_lr": scheduler.get_last_lr(),
+            })
+
+        if config.save_every >= 0 and step % config.save_every == 0:
+            print("Save checkpoint")
+
+            state = {
+                'model': model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'step': step,
+                'samples_so_far': samples_so_far,
+                "min_val_loss": min_eval_loss,
+                "best_step": best_step,
+            }
+            if not os.path.isdir('checkpoint'):
+                os.mkdir('checkpoint')
+            ckpt_path = f'./checkpoint/ckpt_{config.run}_step{step}.pth'
+            torch.save(state, ckpt_path)
+
+            if not use_wandb:
+                artifact = wandb.Artifact(f'{wandb_run.id}-artifact-step{step}', type='model')
+                artifact.add_file(ckpt_path)
+                wandb_run.log_artifact(artifact)
+
+
+    wandb_run.finish()
+
+
+
+if __name__ == "__main__":
+    main()
