@@ -1,4 +1,6 @@
+import glob
 import os
+import random
 
 import hydra
 import polars as pl
@@ -6,10 +8,10 @@ import torch
 import torch.backends.cudnn as cudnn
 import yaml
 from hydra.core.config_store import ConfigStore
+from omegaconf import OmegaConf
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
-from omegaconf import OmegaConf
 
 import wandb
 from config import Config
@@ -18,12 +20,12 @@ from ts_mamba.dataset import TileTimeSeriesDataset
 from ts_mamba.loss_eval import evaluate_model_rmse
 from ts_mamba.model import TimeseriesModel, RMSELoss
 from ts_mamba.optimizer import WarmupCosineLR 
-from ts_mamba.sampler import InfiniteRandomSampler
 from ts_mamba.train_util import plot_forecast_vs_truth_rmse
 
 
 config_store = ConfigStore.instance()
 config_store.store(name="timeseries_deep_learning_config", node=Config)
+
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(config: Config):
@@ -43,9 +45,10 @@ def main(config: Config):
     else:
         wandb_run = DummyWandb()
 
-    train_df = pl.read_parquet(config.dataset.train.data, memory_map=True, use_pyarrow=True, low_memory=True)
-    val_df = pl.read_parquet(config.dataset.validation.data, memory_map=True use_pyarrow=True, low_memory=True)
-    sample_df = pl.read_parquet(config.dataset.sampling.data, memory_map=True, use_pyarrow=True, low_memory=True)
+
+
+    val_df = pl.read_parquet(config.dataset.validation.data)
+    sample_df = pl.read_parquet(config.dataset.sampling.data)
 
     with open(config.dataset.train.meta, "r") as f:
         train_meta = yaml.safe_load(f)
@@ -58,17 +61,51 @@ def main(config: Config):
 
     context_length = 60 // train_meta["time_res"] * 24 * config.context_window_in_days
 
-    train_dataset = TileTimeSeriesDataset(train_df, train_meta, context_length)
-    del train_df
+    print("=> Load data")
+
+    train_shards = sorted(glob.glob(config.dataset.train.data))
+    shard_index = 0
+    train_df = None
+    train_dataset = None
+    train_loader = None
+
+    def load_next_shard():
+        nonlocal shard_index, train_df, train_dataset, train_loader
+
+        if shard_index == 0:
+            random.shuffle(train_shards)
+
+        shard_path = train_shards[shard_index]
+        shard_index += 1
+
+        if shard_index >= len(train_shards):
+            shard_index = 0  # loop around if needed
+
+        # Load shard
+        if train_df is not None:
+            del train_df
+        train_df = pl.read_parquet(shard_path, memory_map=True)
+
+        # Rebuild dataset + loader
+        train_dataset = TileTimeSeriesDataset(train_df, train_meta, context_length)
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=config.batch_size,
+            shuffle=True,
+            num_workers=config.num_workers,
+            persistent_workers=True
+        )
+
+        print(f"Loaded shard {shard_index}/{len(train_shards)}: {shard_path}")
+
+    load_next_shard()
+    train_iter = iter(train_loader)
+
     val_dataset = TileTimeSeriesDataset(val_df, validation_meta, context_length)
     del val_df
     sample_dataset = TileTimeSeriesDataset(sample_df, sample_meta, context_length)
     del sample_df
 
-    def get_train_loader():
-        return DataLoader(train_dataset, batch_size=config.batch_size, sampler=InfiniteRandomSampler(train_dataset), num_workers=config.num_workers)
-
-    train_loader = get_train_loader()
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=config.num_workers)
     sample_loader = DataLoader(sample_dataset, batch_size=64, shuffle=False, num_workers=config.num_workers)
 
@@ -114,7 +151,14 @@ def main(config: Config):
     print('==> Start training..')
     pbar = tqdm(range(start_step, config.total_steps), desc="Training")
     for step in pbar:
-        batch = next(iter(train_loader))
+        try:
+            batch = next(train_iter)
+        except StopIteration:
+            print("=> Load next shard")
+            load_next_shard()
+            train_iter = iter(train_loader)
+            batch = next(train_iter)
+
         last_step = step == config.total_steps - 1
         samples_so_far += config.batch_size
         model.eval()
