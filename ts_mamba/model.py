@@ -1,10 +1,8 @@
 from functools import partial
-import copy
 
 import torch
 import torch.nn as nn
 
-from mamba_ssm.modules.mamba_simple import Mamba
 from mamba_ssm.modules.mamba2 import Mamba2
 from mamba_ssm.modules.mha import MHA
 from mamba_ssm.modules.mlp import GatedMLP
@@ -155,3 +153,25 @@ class RMSELoss(nn.Module):
         #return torch.sqrt(torch.mean((preds[:,-1] - targets[:,-1]) ** 2))
         return torch.sqrt(torch.mean((preds - targets) ** 2))
 
+class WeightedRMSELoss(nn.Module):
+    def __init__(self, decay=0.99):
+        super().__init__()
+        self.decay = decay
+
+    def forward(self, preds, targets):
+        B, L = preds.shape
+        device = preds.device
+
+        # exponential weights increasing toward the final step
+        weights = torch.tensor(
+            [self.decay**(L - 1 - i) for i in range(L)],
+            dtype=torch.float32,
+            device=device
+        )
+        weights = weights / weights.sum()  # normalize so loss scale stays stable
+
+        mse = (preds - targets) ** 2  # (B, L)
+        mse = mse.mean(dim=0)        # avg over batch -> (L)
+        
+        loss = torch.sqrt((weights * mse).sum())
+        return loss
