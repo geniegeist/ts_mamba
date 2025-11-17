@@ -130,11 +130,29 @@ def main(config: Config):
     start_step = 0
     samples_so_far = 0
 
-
     criterion = WeightedRMSELoss(decay=config.rmse_decay)
     #criterion = WeightedRMSELoss()
     optimizer = AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scheduler = WarmupCosineLR(optimizer, warmup_steps=config.warmup_steps, total_steps=config.total_steps, last_epoch=start_step-1)
+
+    if config.resume.enabled and config.resume.checkpoint_path is not None:
+        print('==> Resume from checkpoint..')
+        ckpt = torch.load(config.resume.checkpoint_path, map_location=config.device)
+
+        model.load_state_dict(ckpt['model'], strict=True)
+
+        if 'optimizer' in ckpt:
+            optimizer.load_state_dict(ckpt['optimizer'])
+        if 'scheduler' in ckpt:
+            scheduler.load_state_dict(ckpt['scheduler'])
+
+        start_step = ckpt.get('step', 0) + 1
+        samples_so_far = ckpt.get('samples_so_far', 0)
+        min_eval_loss = ckpt.get('min_val_loss', min_eval_loss)
+        best_step = ckpt.get('best_step', best_step)
+
+        print(f"Resumed from step {start_step} | "
+              f"min_val_loss={min_eval_loss:.4f} best_step={best_step}")
 
     if use_wandb:
         wandb_run.watch(model, log="all")
