@@ -133,7 +133,7 @@ def main(config: Config):
     criterion = WeightedRMSELoss(decay=config.rmse_decay)
     #criterion = WeightedRMSELoss()
     optimizer = AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
-    scheduler = WarmupCosineLR(optimizer, warmup_steps=config.warmup_steps, total_steps=config.total_steps, last_epoch=start_step-1)
+    scheduler = WarmupCosineLR(optimizer, warmup_steps=config.warmup_steps, total_steps=config.total_steps)
 
     if config.resume.enabled and config.resume.checkpoint_path is not None:
         print('==> Resume from checkpoint..')
