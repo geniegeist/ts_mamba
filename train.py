@@ -19,7 +19,7 @@ from config import Config
 from ts_mamba.common import DummyWandb
 from ts_mamba.dataset import TileTimeSeriesDataset
 from ts_mamba.loss_eval import evaluate_model_rmse
-from ts_mamba.model import TimeseriesModel, RMSELoss
+from ts_mamba.model import TimeseriesModel, RMSELoss, WeightedRMSELoss
 from ts_mamba.optimizer import WarmupCosineLR 
 from ts_mamba.train_util import plot_forecast_vs_truth_rmse
 
@@ -133,8 +133,8 @@ def main(config: Config):
     samples_so_far = 0
 
 
-    #criterion = WeightedRMSELoss(decay=config.rmse_decay)
-    criterion = RMSELoss()
+    criterion = WeightedRMSELoss(decay=config.rmse_decay)
+    #criterion = WeightedRMSELoss()
     optimizer = AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scheduler = WarmupCosineLR(optimizer, warmup_steps=config.warmup_steps, total_steps=config.total_steps, last_epoch=start_step-1)
 
