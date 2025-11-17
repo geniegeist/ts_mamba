@@ -47,3 +47,5 @@ class Config:
     context_window_in_days: int
     num_workers: int
     batch_size: int
+
+    validate_at_start: bool
