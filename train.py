@@ -19,7 +19,7 @@ from config import Config
 from ts_mamba.common import DummyWandb
 from ts_mamba.dataset import TileTimeSeriesDataset
 from ts_mamba.loss_eval import evaluate_model_rmse
-from ts_mamba.model import TimeseriesModel, RMSELoss, WeightedRMSELoss
+from ts_mamba.model import TimeseriesModel, WeightedRMSELoss
 from ts_mamba.optimizer import WarmupCosineLR 
 from ts_mamba.train_util import plot_forecast_vs_truth_rmse
 
@@ -203,7 +203,7 @@ def main(config: Config):
             wandb_run.log({
                 "samples_so_far": samples_so_far,
                 "val_loss": val_res["loss"],
-                "val_loss_last": val_res["loss_last"],
+                "val_rmse": val_res["rmse"],
                 "val_mae": val_res["mae"],
                 "val_zero_mae": val_res["zero_mae"],
                 "val_pos_mae": val_res["pos_mae"],

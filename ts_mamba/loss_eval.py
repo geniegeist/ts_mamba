@@ -1,6 +1,9 @@
 import torch
 from tqdm.auto import tqdm
 
+from ts_mamba.model import RMSELoss
+
+
 def evaluate_model(model, criterion, loader, device) -> dict[str, float]:
     eval_loss = 0
     eval_mae = 0
@@ -32,10 +35,13 @@ def evaluate_model(model, criterion, loader, device) -> dict[str, float]:
 
 def evaluate_model_rmse(model, criterion, loader, device) -> dict[str, float]:
     eval_loss = 0
-    eval_loss_last = 0
+    eval_rmse = 0
     eval_mae = 0
     eval_zero_mae = 0
     eval_pos_mae = 0
+
+    rmse_crit = RMSELoss()
+
     with torch.no_grad():
         pbar = tqdm(enumerate(loader))
         for batch_idx, data in pbar:
@@ -43,7 +49,7 @@ def evaluate_model_rmse(model, criterion, loader, device) -> dict[str, float]:
             obs, targets = obs.to(device), targets.to(device)
             preds = model(obs)
             loss = criterion(preds, targets)
-            loss_last = criterion(preds[:,-1], targets[:,-1])
+            rmse = rmse_crit(preds[:,-1], targets[:,-1])
             mae = torch.mean(torch.abs(preds[:,-1] - targets[:,-1]))
 
             # Make mask for samples whose last target value == 0
@@ -66,25 +72,25 @@ def evaluate_model_rmse(model, criterion, loader, device) -> dict[str, float]:
                 pos_mae = torch.tensor(0.0, device=preds.device)
 
             eval_loss += loss.item()
-            eval_loss_last += loss_last.item()
+            eval_rmse += rmse.item()
             eval_mae += mae.item()
             eval_zero_mae += zero_mae.item()
             eval_pos_mae += pos_mae.item()
 
             pbar.set_description(
-                'Val Batch Idx: (%d/%d) | val loss: %.3f | val loss last: %.3f | MAE: %.3f | zero-MAE: %.3f | pos-MAE: %.3f' %
-                    (batch_idx, len(loader), eval_loss/(batch_idx+1), eval_loss_last/(batch_idx+1), eval_mae/(batch_idx+1), eval_zero_mae/(batch_idx+1), eval_pos_mae/(batch_idx+1))
+                'Val Batch Idx: (%d/%d) | Loss: %.3f | RMSE: %.3f | MAE: %.3f | zero-MAE: %.3f | pos-MAE: %.3f' %
+                    (batch_idx, len(loader), eval_loss/(batch_idx+1), eval_rmse/(batch_idx+1), eval_mae/(batch_idx+1), eval_zero_mae/(batch_idx+1), eval_pos_mae/(batch_idx+1))
             )
 
         avg_eval_loss = eval_loss / len(loader)
-        avg_eval_loss_last = eval_loss_last / len(loader)
+        avg_eval_loss_last = eval_rmse / len(loader)
         avg_eval_mae = eval_mae / len(loader)
         avg_eval_zero_mae = eval_zero_mae / len(loader)
         avg_eval_pos_mae = eval_pos_mae / len(loader)
 
     return {
         "loss": avg_eval_loss,
-        "loss_last": avg_eval_loss_last,
+        "rmse": avg_eval_loss_last,
         "mae": avg_eval_mae,
         "zero_mae": avg_eval_zero_mae,
         "pos_mae": avg_eval_pos_mae,
