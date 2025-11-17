@@ -89,7 +89,7 @@ class TimeseriesModel(nn.Module):
         super().__init__()
 
         # Encoder
-        self.encoder = nn.Linear(d_input, d_model)
+        self.encoder = nn.Linear(d_input, d_model, **factory_kwargs)
 
         self.layers = nn.ModuleList(
             [
@@ -114,7 +114,7 @@ class TimeseriesModel(nn.Module):
         )
 
         # Final output head for point prediction
-        self.decoder = nn.Linear(d_model, 1)
+        self.decoder = nn.Linear(d_model, 1, **factory_kwargs)
 
     def forward(self, x):
         """
