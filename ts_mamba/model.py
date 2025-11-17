@@ -121,6 +121,7 @@ class TimeseriesModel(nn.Module):
         x: (batch, seq_len, d_input)
         returns: point predictions (batch, seq_len, 1)
         """
+        x = x.to(self.encoder.weight.dtype)
         x = self.encoder(x)
         residual = None
 
