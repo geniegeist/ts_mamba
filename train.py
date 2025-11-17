@@ -186,7 +186,7 @@ def main(config: Config):
         samples_so_far += config.batch_size
         model.eval()
         # once in a while: evaluate model
-        if (step == 0 and config.validate_at_start) or last_step or step % config.eval_every == 0:
+        if  last_step or (step % config.eval_every == 0 and not (step == 0 and not config.validate_at_start)):
             val_res = evaluate_model_rmse(
                 model=model,
                 criterion=criterion,
