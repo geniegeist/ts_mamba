@@ -159,7 +159,7 @@ class WeightedRMSELoss(nn.Module):
         self.decay = decay
 
     def forward(self, preds, targets):
-        B, L = preds.shape
+        _, L, _ = preds.shape
         device = preds.device
 
         # exponential weights increasing toward the final step
