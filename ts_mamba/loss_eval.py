@@ -49,7 +49,7 @@ def evaluate_model_rmse(model, criterion, loader, device) -> dict[str, float]:
             obs, targets = obs.to(device), targets.to(device)
             preds = model(obs)
             loss = criterion(preds, targets)
-            rmse = rmse_crit(preds[:,-1], targets[:,-1])
+            rmse = rmse_crit(preds, targets)
             mae = torch.mean(torch.abs(preds[:,-1] - targets[:,-1]))
 
             # Make mask for samples whose last target value == 0
