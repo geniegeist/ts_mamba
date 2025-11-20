@@ -190,7 +190,7 @@ def plot_llm(model, loader, device, wandb_run, epoch):
 
 
     # --- FLATTEN EVERYTHING ---
-    flat_ts        = torch.cat(ts, dim=0)
+    flat_ts = torch.cat(ts, dim=0).cpu().numpy().astype("int64")
     flat_truths    = torch.cat(truths).numpy()
     flat_top1      = torch.cat(preds_top1).numpy()
     flat_top2      = torch.cat(preds_top2).numpy()
