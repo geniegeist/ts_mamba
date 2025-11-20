@@ -145,29 +145,30 @@ def plot_llm(model, loader, device, wandb_run, epoch):
 
             t = target_timestamp[:, -1]
 
-            truths.append(targets[:, -1])
-            preds_top1.append(top3_idx[:, 0].cpu())
-            preds_top2.append(top3_idx[:, 1].cpu())
-            preds_top3.append(top3_idx[:, 2].cpu())
+            truths.append(targets[:, -1].cpu().long())
+            preds_top1.append(top3_idx[:, 0].cpu().long())
+            preds_top2.append(top3_idx[:, 1].cpu().long())
+            preds_top3.append(top3_idx[:, 2].cpu().long())
 
-            probs_top1.append(top3_vals[:, 0].cpu())
-            probs_top2.append(top3_vals[:, 1].cpu())
-            probs_top3.append(top3_vals[:, 2].cpu())
+            # convert probabilities to float32 for polars
+            probs_top1.append(top3_vals[:, 0].cpu().float())
+            probs_top2.append(top3_vals[:, 1].cpu().float())
+            probs_top3.append(top3_vals[:, 2].cpu().float())
 
             tile_ids.extend(tile_id[0])
-            ts.append(t)
+            ts.append(t.cpu().long())
 
     # ---- concatenate ----
     df = pl.DataFrame({
         "tile_id": tile_ids,
-        "reference_time": torch.cat(ts).cpu(),
-        "truth": torch.cat(truths).cpu(),
-        "top1": torch.cat(preds_top1).cpu(),
-        "top2": torch.cat(preds_top2).cpu(),
-        "top3": torch.cat(preds_top3).cpu(),
-        "p1": torch.cat(probs_top1).cpu(),
-        "p2": torch.cat(probs_top2).cpu(),
-        "p3": torch.cat(probs_top3).cpu(),
+        "reference_time": torch.cat(ts).numpy(),          # int64 timestamps
+        "truth": torch.cat(truths).numpy(),               # int64
+        "top1": torch.cat(preds_top1).numpy(),            # int64
+        "top2": torch.cat(preds_top2).numpy(),            # int64
+        "top3": torch.cat(preds_top3).numpy(),            # int64
+        "p1": torch.cat(probs_top1).numpy().astype(float),# float32
+        "p2": torch.cat(probs_top2).numpy().astype(float),
+        "p3": torch.cat(probs_top3).numpy().astype(float),
     }).with_columns([
         pl.col("reference_time").cast(pl.Datetime).alias("reference_time"),
     ]).with_columns([
