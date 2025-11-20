@@ -3,6 +3,7 @@ from tqdm.auto import tqdm
 import polars as pl
 import matplotlib.pyplot as plt
 import wandb
+import torch.nn.functional as F
 
 def plot_forecast_vs_truth(model, loader, device, wandb_run, epoch):
     mus, alphas, tile_ids, ts = [], [], [], []
@@ -125,162 +126,6 @@ def plot_forecast_vs_truth_rmse(model, loader, device, wandb_run, epoch):
             wandb_run.log({log_key: wandb.Image(plt)})
             plt.close()
 
-def plot_llm(model, loader, device, wandb_run, epoch):
-    preds_top1, preds_top2, preds_top3 = [], [], []
-    probs_top1, probs_top2, probs_top3 = [], [], []
-
-    tile_ids = []
-    ts = []
-    truths = []
-
-    with torch.no_grad():
-        for data in tqdm(loader, total=len(loader), leave=False, desc="Sample Batch index"):
-            obs, targets, tile_id, target_timestamp = (
-                data["context"],
-                data["target"],
-                data["tile_id"],
-                data["target_timestamp"]
-            )
-
-            obs = obs.squeeze(-1).to(device)
-            logits = model(obs, num_last_tokens=1).logits.squeeze(1)  # (batch, vocab)
-            probs = torch.softmax(logits, dim=-1)
-
-            # --- TOP-3 ---
-            top3_vals, top3_idx = torch.topk(probs, k=3, dim=-1)
-
-            # Extract final timestamp + target for each sample in the batch
-            t = target_timestamp[:, -1].cpu().long()   # (batch,)
-            y = targets[:, -1].cpu().long()            # (batch,)
-
-            truths.append(y)
-            ts.append(t)
-
-            preds_top1.append(top3_idx[:, 0].cpu().long())
-            preds_top2.append(top3_idx[:, 1].cpu().long())
-            preds_top3.append(top3_idx[:, 2].cpu().long())
-
-            probs_top1.append(top3_vals[:, 0].cpu().float())
-            probs_top2.append(top3_vals[:, 1].cpu().float())
-            probs_top3.append(top3_vals[:, 2].cpu().float())
-
-            # ---- FIX tile_id handling (batch-level → sample-level) ----
-            if isinstance(tile_id, torch.Tensor):
-                # tile_id: shape (batch, 1) or (batch,)
-                tile_id_batch = tile_id.squeeze().cpu().tolist()
-
-            elif isinstance(tile_id, list):
-                # Already a list, probably length = batch_size or = 1
-                tile_id_batch = tile_id
-            else:
-                raise TypeError(f"Unexpected tile_id type: {type(tile_id)}")
-
-# Make sure tile_id_batch has length = 1 or = batch_size
-            if len(tile_id_batch) == 1:
-                # One tile ID for whole batch → repeat for each sample
-                tile_ids.extend([tile_id_batch[0]] * t.shape[0])
-            elif len(tile_id_batch) == t.shape[0]:
-                # Perfect, one tile_id per sample
-                tile_ids.extend(tile_id_batch)
-            else:
-                raise ValueError(
-                    f"tile_id length mismatch: len(tile_id_batch)={len(tile_id_batch)}, "
-                    f"batch_size={t.shape[0]}"
-                )
-
-
-    # --- FLATTEN EVERYTHING ---
-    flat_ts = torch.cat(ts, dim=0).cpu().numpy().astype("int64")
-    flat_truths    = torch.cat(truths).numpy()
-    flat_top1      = torch.cat(preds_top1).numpy()
-    flat_top2      = torch.cat(preds_top2).numpy()
-    flat_top3      = torch.cat(preds_top3).numpy()
-    flat_p1        = torch.cat(probs_top1).numpy().astype(float)
-    flat_p2        = torch.cat(probs_top2).numpy().astype(float)
-    flat_p3        = torch.cat(probs_top3).numpy().astype(float)
-
-    # --- BUILD POLARS DF ---
-    df = pl.DataFrame({
-        "tile_id": tile_ids,
-        "reference_time": flat_ts,   # epoch timestamps
-        "truth": flat_truths,
-        "top1": flat_top1,
-        "top2": flat_top2,
-        "top3": flat_top3,
-        "p1": flat_p1,
-        "p2": flat_p2,
-        "p3": flat_p3,
-    })
-
-    # Convert timestamps
-    df = (
-        df.with_columns(
-            pl.col("reference_time").cast(pl.Datetime).alias("reference_time")
-        )
-        .with_columns(
-            pl.col("reference_time")
-            .dt.replace_time_zone("UTC")
-            .dt.convert_time_zone("America/Regina")
-            .alias("reference_time_local")
-        )
-        .with_columns(
-            pl.col("reference_time_local").dt.date().alias("date_local")
-        )
-    )
-
-    # --- PLOT FOR EACH TILE × DAY ---
-    for tile_id, tile_df in df.group_by("tile_id"):
-        for date_val, day_df in tile_df.group_by("date_local"):
-
-            # Convert Polars → Pandas for plotting
-            day_pd = day_df.sort("reference_time_local").to_pandas()
-
-            plt.figure(figsize=(10, 6))
-
-            # TRUTH LINE
-            plt.plot(
-                day_pd["reference_time_local"],
-                day_pd["truth"],
-                label="Truth",
-                marker="o"
-            )
-
-            # TOP-3 PREDICTIONS
-            plt.scatter(
-                day_pd["reference_time_local"],
-                day_pd["top1"],
-                s=80 * day_pd["p1"],
-                marker="x",
-                label="Top-1"
-            )
-            plt.scatter(
-                day_pd["reference_time_local"],
-                day_pd["top2"],
-                s=80 * day_pd["p2"],
-                marker="^",
-                label="Top-2"
-            )
-            plt.scatter(
-                day_pd["reference_time_local"],
-                day_pd["top3"],
-                s=80 * day_pd["p3"],
-                marker="s",
-                label="Top-3"
-            )
-
-            plt.title(f"Tile {tile_id} — {date_val} (America/Regina)")
-            plt.xlabel("Local Reference Time")
-            plt.ylabel("Class / Count")
-            plt.legend()
-            plt.tight_layout()
-
-            wandb_run.log({
-                f"plots/epoch{epoch}/{tile_id}/day_{date_val.isoformat()}":
-                    wandb.Image(plt)
-            })
-
-            plt.close()
-
 def plot_llm2(model, loader, device, wandb_run, epoch):
     preds, tile_ids, ts = [], [], []
     truths = []
@@ -341,3 +186,112 @@ def plot_llm2(model, loader, device, wandb_run, epoch):
             plt.close()
 
 
+
+def plot_llm(model, loader, device, wandb_run, epoch):
+    # Initialize lists for new metrics
+    preds_top3 = [] # To store top 3 tokens
+    expectations = [] # To store expected value
+    tile_ids, ts = [], []
+    truths = []
+
+    with torch.no_grad():
+        for data in tqdm(loader, total=len(loader), leave=False, desc="Sample Batch index"):
+            
+            obs, targets, tile_id, target_timestamp = data["context"], data["target"], data["tile_id"], data["target_timestamp"]
+            obs = obs.squeeze(-1).to(device)
+            
+            # Get Logits
+            logits = model(obs, num_last_tokens=1).logits.squeeze(1) # (batch, vocab)
+            
+            # --- CALCULATIONS START ---
+            
+            # 1. Convert logits to probabilities
+            probs = F.softmax(logits, dim=-1) # (batch, vocab)
+            
+            # 2. Calculate Expectation: Sum(Value * Probability)
+            # Create a tensor of token values [0, 1, 2, ... vocab_size]
+            vocab_values = torch.arange(logits.shape[-1], device=device).float()
+            expected_value = torch.sum(probs * vocab_values, dim=-1) # (batch, )
+            
+            # 3. Get Top 3 Tokens
+            # topk returns values (probs) and indices (tokens). We only need indices here.
+            _, top3_indices = torch.topk(probs, k=3, dim=-1) # (batch, 3)
+
+            # --- CALCULATIONS END ---
+
+            t = target_timestamp[:,-1]
+            truths.append(targets[:,-1])
+            
+            # Store results
+            preds_top3.append(top3_indices.cpu())
+            expectations.append(expected_value.cpu())
+            tile_ids.extend(tile_id[0])
+            ts.append(t)
+
+    # Concatenate all batches
+    cat_targets = torch.cat(truths, dim=0)
+    cat_preds_top3 = torch.cat(preds_top3, dim=0) # (Total_Samples, 3)
+    cat_expectations = torch.cat(expectations, dim=0)
+    cat_ts = torch.cat(ts, dim=0)
+
+    records = []
+    # Zip through data to create rows. Note: rank1 is index 0, rank2 is index 1, etc.
+    for (truth, top3, exp, t, tile) in zip(cat_targets, cat_preds_top3, cat_expectations, cat_ts, tile_ids):
+        records.append([
+            tile, 
+            t, 
+            truth.item(), 
+            top3[0].item(), # Top 1 (Argmax)
+            top3[1].item(), # Top 2
+            top3[2].item(), # Top 3
+            exp.item()      # Expectation
+        ])
+
+    df = pl.DataFrame(
+        records,
+        schema=["tile_id", "reference_time", "count", "top1", "top2", "top3", "expectation"],
+        orient="row"
+    ).with_columns(
+        pl.col("reference_time").cast(pl.Datetime).alias("reference_time")
+    ).with_columns(
+        pl.col("reference_time")
+        .dt.replace_time_zone("UTC") 
+        .dt.convert_time_zone("America/Regina")
+        .alias("reference_time_local")
+    ).with_columns(
+        pl.col("reference_time_local").dt.date().alias("date_local")
+    )
+
+    # Plot and log each tile
+    for tile_group, tile_df in df.group_by("tile_id"):
+        tile_id = tile_group[0] if isinstance(tile_group, tuple) else tile_group
+
+        for day_group, day_df in tile_df.group_by("date_local"):
+            day = day_group[0] if isinstance(day_group, tuple) else day_group
+
+            day_pd = day_df.sort("reference_time_local").to_pandas()
+
+            plt.figure(figsize=(10, 6))
+            
+            # 1. Plot Truth
+            plt.plot(day_pd["reference_time_local"], day_pd["count"], label="Truth", marker="o", color="black", linewidth=1.5, zorder=10)
+            
+            # 2. Plot Expectation (Usually a smooth line)
+            plt.plot(day_pd["reference_time_local"], day_pd["expectation"], label="Expectation", linestyle="--", color="darkorange", linewidth=2)
+
+            # 3. Plot Top 1 (The original 'mu')
+            plt.scatter(day_pd["reference_time_local"], day_pd["top1"], label="Top 1", marker="x", color="blue", s=40, alpha=1.0)
+            
+            # 4. Plot Top 2 and Top 3 (With lower opacity/different markers)
+            plt.scatter(day_pd["reference_time_local"], day_pd["top2"], label="Top 2", marker="1", color="tab:blue", s=30, alpha=0.6)
+            plt.scatter(day_pd["reference_time_local"], day_pd["top3"], label="Top 3", marker="2", color="tab:blue", s=30, alpha=0.4)
+
+            plt.title(f"Tile {tile_id} — {day} (America/Regina)")
+            plt.xlabel("Local Reference Time")
+            plt.ylabel("Count")
+            plt.legend()
+            plt.tight_layout()
+
+            log_key = f"plots/epoch{epoch}/{tile_id}/day_{day.isoformat()}"
+            wandb_run.log({log_key: wandb.Image(plt)})
+            plt.close()
