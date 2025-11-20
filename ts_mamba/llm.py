@@ -233,7 +233,7 @@ class MambaLMHeadModel(nn.Module, GenerationMixin):
             vocab_size += pad_vocab_size_multiple - (vocab_size % pad_vocab_size_multiple)
         self.backbone = MixerModel(
             d_model=d_model,
-            n_layer=n_layer,
+            n_layers=n_layer,
             d_intermediate=d_intermediate,
             vocab_size=vocab_size,
             ssm_cfg=ssm_cfg,
