@@ -124,6 +124,7 @@ class MixerModel(nn.Module):
         initializer_cfg=None,
         norm_epsilon: float = 1e-5,
         residual_in_fp32: bool = True,
+        fused_add_norm: bool = True,
         device=None,
         dtype=None,
     ):
@@ -143,6 +144,7 @@ class MixerModel(nn.Module):
                     norm_epsilon=norm_epsilon,
                     rms_norm=rms_norm,
                     residual_in_fp32=residual_in_fp32,
+                    fused_add_norm=fused_add_norm,
                     layer_idx=i,
                     **factory_kwargs,
                 )
