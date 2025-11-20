@@ -75,7 +75,7 @@ def main(config: Config):
         train_df = pl.read_parquet(shard_path, memory_map=True)
 
         # Build dataset + loader
-        train_dataset = TileTimeSeriesDataset(train_df, train_meta, context_length, use_features=config.model.model != "lm")
+        train_dataset = TileTimeSeriesDataset(train_df, train_meta, context_length, use_features=config.model.model != "llm")
         train_loader = DataLoader(
             train_dataset,
             batch_size=config.batch_size,
@@ -98,8 +98,8 @@ def main(config: Config):
     print("=> Load validation and sampling datasets")
     val_df = pl.read_parquet(config.dataset.validation.data)
     sample_df = pl.read_parquet(config.dataset.sampling.data)
-    val_dataset = TileTimeSeriesDataset(val_df, validation_meta, context_length, use_features=config.model.model != "lm")
-    sample_dataset = TileTimeSeriesDataset(sample_df, sample_meta, context_length, use_features=config.model.model != "lm")
+    val_dataset = TileTimeSeriesDataset(val_df, validation_meta, context_length, use_features=config.model.model != "llm")
+    sample_dataset = TileTimeSeriesDataset(sample_df, sample_meta, context_length, use_features=config.model.model != "llm")
     val_loader = DataLoader(val_dataset, batch_size=64, shuffle=False, num_workers=config.num_workers)
     sample_loader = DataLoader(sample_dataset, batch_size=64, shuffle=False, num_workers=config.num_workers)
     del val_df, sample_df
