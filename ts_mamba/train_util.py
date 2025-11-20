@@ -164,15 +164,29 @@ def plot_llm(model, loader, device, wandb_run, epoch):
             probs_top2.append(top3_vals[:, 1].cpu().float())
             probs_top3.append(top3_vals[:, 2].cpu().float())
 
-            # tile_id: sometimes list, sometimes tensor — handle both
+            # ---- FIX tile_id handling (batch-level → sample-level) ----
             if isinstance(tile_id, torch.Tensor):
-                # (batch, 1) or (batch,) → flatten
-                tile_ids.extend(tile_id.squeeze().cpu().tolist())
+                # tile_id: shape (batch, 1) or (batch,)
+                tile_id_batch = tile_id.squeeze().cpu().tolist()
+
             elif isinstance(tile_id, list):
-                # Already a Python list of ints
-                tile_ids.extend(tile_id)
+                # Already a list, probably length = batch_size or = 1
+                tile_id_batch = tile_id
             else:
                 raise TypeError(f"Unexpected tile_id type: {type(tile_id)}")
+
+# Make sure tile_id_batch has length = 1 or = batch_size
+            if len(tile_id_batch) == 1:
+                # One tile ID for whole batch → repeat for each sample
+                tile_ids.extend([tile_id_batch[0]] * t.shape[0])
+            elif len(tile_id_batch) == t.shape[0]:
+                # Perfect, one tile_id per sample
+                tile_ids.extend(tile_id_batch)
+            else:
+                raise ValueError(
+                    f"tile_id length mismatch: len(tile_id_batch)={len(tile_id_batch)}, "
+                    f"batch_size={t.shape[0]}"
+                )
 
 
     # --- FLATTEN EVERYTHING ---
