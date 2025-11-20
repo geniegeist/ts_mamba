@@ -319,7 +319,18 @@ def main(config: Config):
                     "last_lr": scheduler.get_last_lr(),
                 })
         elif config.loss == 'cross_entropy':
-            pass
+            pbar.set_description(
+                'Step: (%d/%d) | Train loss: %.6f' %
+                (step, config.total_steps, debiased_smooth_loss)
+            )
+
+            if step % 10 == 0:
+                wandb_run.log({
+                    "samples_so_far": samples_so_far,
+                    "train_loss": debiased_smooth_loss,
+                    "last_lr": scheduler.get_last_lr(),
+                })
+
 
         if config.save_every >= 0 and step % config.save_every == 0:
             print("Save checkpoint")
