@@ -9,7 +9,7 @@ def evaluate_llm(model, criterion, loader, device) -> dict[str, float]:
         pbar = tqdm(enumerate(loader))
         for batch_idx, data in pbar:
             obs, targets = data["context"], data["target"]
-            obs, targets = obs.squeeze(-1).to(device), targets.squeeze(-1).to(device)
+            obs, targets = obs.squeeze(-1).to(device), targets[:,-1].reshape(-1).to(device)
             logits = model(obs, num_last_tokens=1).logits
             loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
 
