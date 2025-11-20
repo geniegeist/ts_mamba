@@ -3,6 +3,28 @@ from tqdm.auto import tqdm
 
 from ts_mamba.model import RMSELoss
 
+def evaluate_llm(model, criterion, loader, device) -> dict[str, float]:
+    eval_loss = 0
+    with torch.no_grad():
+        pbar = tqdm(enumerate(loader))
+        for batch_idx, data in pbar:
+            obs, targets = data["context"], data["target"]
+            obs, targets = obs.squeeze(-1).to(device), targets.squeeze(-1).to(device)
+            preds = model(obs, num_last_tokens=1).squeeze(1)
+            loss = criterion(preds, targets)
+
+            eval_loss += loss.item()
+
+            pbar.set_description(
+                'Val Batch Idx: (%d/%d) | Val loss: %.3f' %
+                    (batch_idx, len(loader), eval_loss/(batch_idx+1))
+            )
+
+        avg_eval_loss = eval_loss / len(loader)
+
+    return {
+        "loss": avg_eval_loss,
+    }
 
 def evaluate_model(model, criterion, loader, device) -> dict[str, float]:
     eval_loss = 0

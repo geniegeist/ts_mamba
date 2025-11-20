@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 @dataclass 
 class Model:
+    model: str
     n_layers: int
     d_model: int
     d_intermediate: int
@@ -15,6 +16,8 @@ class Model:
     residual_in_fp32: bool
     attn_layer_idx: list[int]
     attn_cfg: dict
+    vocab_size: int
+    tie_embeddings: bool
 
 @dataclass
 class DatasetConfig:
@@ -37,15 +40,21 @@ class Wandb:
     mode: str
     id: str
 
+@dataclass 
+class Train:
+    num_last_tokens: int
+
 @dataclass
 class Config:
     dataset: Dataset
     model: Model
     wandb: Wandb
+    train: Train
 
     device: str
     context_window_in_days: int
     num_workers: int
     batch_size: int
+    loss: str
 
     validate_at_start: bool

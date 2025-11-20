@@ -10,6 +10,7 @@ lit # Getting installation errors with torch 2.0 if this isn't installed
 torch
 mamba-ssm
 causal_conv1d
+flash_attn
 pytorch-lightning==2.0.4
 hydra-core
 omegaconf

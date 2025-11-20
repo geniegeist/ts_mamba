@@ -7,6 +7,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import yaml
 from hydra.core.config_store import ConfigStore
+from mamba_ssm.models.config_mamba import MambaConfig
 from omegaconf import OmegaConf
 from torch.optim import AdamW
 from torch.utils.data import DataLoader
@@ -16,10 +17,11 @@ import wandb
 from config import Config
 from ts_mamba.common import DummyWandb
 from ts_mamba.dataset import TileTimeSeriesDataset
-from ts_mamba.loss_eval import evaluate_model_rmse
+from ts_mamba.llm import MambaLMHeadModel 
+from ts_mamba.loss_eval import evaluate_model_rmse, evaluate_llm
 from ts_mamba.model import TimeseriesModel, WeightedRMSELoss
 from ts_mamba.optimizer import WarmupCosineLR 
-from ts_mamba.train_util import plot_forecast_vs_truth_rmse
+from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm
 
 
 config_store = ConfigStore.instance()
@@ -105,20 +107,44 @@ def main(config: Config):
 
     print('==> Building model..')
     d_input = len(train_meta["features"])
-    model = TimeseriesModel(
-        d_input=d_input,
-        d_model=config.model.d_model,
-        d_intermediate=config.model.d_intermediate,
-        n_layers=config.model.n_layers,
-        ssm_cfg=config.model.ssm_cfg,
-        attn_layer_idx=config.model.attn_layer_idx,
-        attn_cfg=config.model.attn_cfg,
-        norm_epsilon=config.model.norm_epsilon,
-        rms_norm=config.model.rms_norm,
-        residual_in_fp32=config.model.residual_in_fp32,
-        dtype=torch.bfloat16,
-        device=config.device,
-    )
+    model = None
+    if config.model.model == 'mamba':
+        model = TimeseriesModel(
+            d_input=d_input,
+            d_model=config.model.d_model,
+            d_intermediate=config.model.d_intermediate,
+            n_layers=config.model.n_layers,
+            ssm_cfg=config.model.ssm_cfg,
+            attn_layer_idx=config.model.attn_layer_idx,
+            attn_cfg=config.model.attn_cfg,
+            norm_epsilon=config.model.norm_epsilon,
+            rms_norm=config.model.rms_norm,
+            residual_in_fp32=config.model.residual_in_fp32,
+            dtype=torch.bfloat16,
+            device=config.device,
+        )
+    elif config.model.model == 'llm':
+        model = MambaLMHeadModel(
+            config=MambaConfig(
+                d_model=config.model.d_model,
+                d_intermediate=config.model.d_intermediate,
+                n_layer=config.model.n_layers,
+                vocab_size=config.model.vocab_size,
+                ssm_cfg=config.model.ssm_cfg,
+                attn_layer_idx=config.model.attn_layer_idx,
+                attn_cfg=config.model.attn_cfg,
+                rms_norm=config.model.rms_norm,
+                residual_in_fp32=config.model.residual_in_fp32,
+                fused_add_norm=True,
+                pad_vocab_size_multiple=8,
+                tie_embeddings=config.model.tie_embeddings,
+            ),
+            dtype=torch.bfloat16,
+            device=config.device,
+        )
+        pass
+    else:
+        raise ValueError(f"Invalid config.model.model: {config.model.model}")
     model = model.to(config.device)
 
     if config.device == 'cuda':
@@ -130,8 +156,16 @@ def main(config: Config):
     start_step = 0
     samples_so_far = 0
 
-    criterion = WeightedRMSELoss(decay=config.rmse_decay)
-    #criterion = WeightedRMSELoss()
+    criterion = None
+
+    if config.loss == 'rmse':
+        criterion = WeightedRMSELoss(decay=config.rmse_decay)
+    elif config.loss == 'cross_entropy':
+        criterion = torch.nn.CrossEntropyLoss()
+    else:
+        raise ValueError(f"Invalid config.loss: {config.loss}")
+
+
     optimizer = AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     scheduler = WarmupCosineLR(optimizer, warmup_steps=config.warmup_steps, total_steps=config.total_steps)
 
@@ -161,7 +195,6 @@ def main(config: Config):
     smooth_train_loss = 0
     smooth_mae = 0
 
-
     print('==> Start training..')
     pbar = tqdm(range(start_step, config.total_steps), desc="Training")
     for step in pbar:
@@ -177,49 +210,84 @@ def main(config: Config):
         samples_so_far += config.batch_size
         model.eval()
         # once in a while: evaluate model
-        if  last_step or (step % config.eval_every == 0 and not (step == 0 and not config.validate_at_start)):
-            val_res = evaluate_model_rmse(
-                model=model,
-                criterion=criterion,
-                loader=val_loader,
-                device=config.device,
-            )
+        if last_step or (step % config.eval_every == 0 and not (step == 0 and not config.validate_at_start)):
+            if config.loss == 'rmse':
+                val_res = evaluate_model_rmse(
+                    model=model,
+                    criterion=criterion,
+                    loader=val_loader,
+                    device=config.device,
+                )
 
-            if val_res["loss"] < min_eval_loss:
-                min_eval_loss = val_res["loss"]
-                best_step = step
+                if val_res["loss"] < min_eval_loss:
+                    min_eval_loss = val_res["loss"]
+                    best_step = step
 
-            wandb_run.log({
-                "samples_so_far": samples_so_far,
-                "val_loss": val_res["loss"],
-                "val_rmse": val_res["rmse"],
-                "val_mae": val_res["mae"],
-                "val_zero_mae": val_res["zero_mae"],
-                "val_pos_mae": val_res["pos_mae"],
-                "min_val_loss": min_eval_loss,
-                "best_step": best_step,
-            })
+                wandb_run.log({
+                    "samples_so_far": samples_so_far,
+                    "val_loss": val_res["loss"],
+                    "val_rmse": val_res["rmse"],
+                    "val_mae": val_res["mae"],
+                    "val_zero_mae": val_res["zero_mae"],
+                    "val_pos_mae": val_res["pos_mae"],
+                    "min_val_loss": min_eval_loss,
+                    "best_step": best_step,
+                })
+            elif config.loss == 'cross_entropy':
+                val_res = evaluate_llm(
+                    model=model,
+                    criterion=criterion,
+                    loader=val_loader,
+                    device=config.device,
+                )
+
+                if val_res["loss"] < min_eval_loss:
+                    min_eval_loss = val_res["loss"]
+                    best_step = step
+
+                wandb_run.log({
+                    "samples_so_far": samples_so_far,
+                    "val_loss": val_res["loss"],
+                    "min_val_loss": min_eval_loss,
+                    "best_step": best_step,
+                })
+
 
         # once in a while: sample from model
         if config is not None and config.sample_every > 0 and (last_step or (step % config.sample_every == 0)):
-            plot_forecast_vs_truth_rmse(
-                model=model,
-                loader=sample_loader,
-                device=config.device,
-                wandb_run=wandb_run,
-                epoch=step,
-            )
+            if config.loss == 'rmse':
+                plot_forecast_vs_truth_rmse(
+                    model=model,
+                    loader=sample_loader,
+                    device=config.device,
+                    wandb_run=wandb_run,
+                    epoch=step,
+                )
+            elif config.loss == 'cross_entropy':
+                plot_llm(
+                    model=model,
+                    loader=sample_loader,
+                    device=config.device,
+                    wandb_run=wandb_run,
+                    epoch=step
+                )
+                pass
 
         # Training
         wandb_run.log({ "last_lr": scheduler.get_last_lr() })
         model.train()
 
         obs, targets = batch["context"], batch["target"]
+        if config.loss == 'cross_entropy':
+            obs, targets = obs.squeeze(-1), targets.squeeze(-1)
         obs, targets = obs.to(config.device), targets.to(config.device)
 
         optimizer.zero_grad()
 
-        preds = model(obs)
+        if config.model.model == "mamba":
+            preds = model(obs)
+        elif config.model.model == "llm":
+            preds = model(obs, num_last_tokens=config.train.num_last_tokens)
 
         loss = criterion(preds, targets)
         loss.backward()
@@ -231,22 +299,25 @@ def main(config: Config):
         smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * loss.item() # EMA the training loss
         debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
 
-        mae = torch.mean(torch.abs(preds[:,-1] - targets[:,-1]))
-        smooth_mae = ema_beta * smooth_mae + (1 - ema_beta) * mae.item() # EMA the training loss
-        debiased_smooth_mae = smooth_mae / (1 - ema_beta**(step + 1))
+        if config.loss == 'rmse':
+            mae = torch.mean(torch.abs(preds[:,-1] - targets[:,-1]))
+            smooth_mae = ema_beta * smooth_mae + (1 - ema_beta) * mae.item() # EMA the training loss
+            debiased_smooth_mae = smooth_mae / (1 - ema_beta**(step + 1))
 
-        pbar.set_description(
-            'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
-            (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
-        )
+            pbar.set_description(
+                'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
+                (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
+            )
 
-        if step % 10 == 0:
-            wandb_run.log({
-                "samples_so_far": samples_so_far,
-                "train_loss": debiased_smooth_loss,
-                "train_mae": debiased_smooth_mae,
-                "last_lr": scheduler.get_last_lr(),
-            })
+            if step % 10 == 0:
+                wandb_run.log({
+                    "samples_so_far": samples_so_far,
+                    "train_loss": debiased_smooth_loss,
+                    "train_mae": debiased_smooth_mae,
+                    "last_lr": scheduler.get_last_lr(),
+                })
+        elif config.loss == 'cross_entropy':
+            pass
 
         if config.save_every >= 0 and step % config.save_every == 0:
             print("Save checkpoint")

@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import Dataset
 
 class TileTimeSeriesDataset(Dataset):
-    def __init__(self, df: pl.DataFrame, meta: dict, context_length: int):
+    def __init__(self, df: pl.DataFrame, meta: dict, context_length: int, use_features: bool):
         """
         Args:
             df: Polars DataFrame containing all data.
@@ -37,7 +37,10 @@ class TileTimeSeriesDataset(Dataset):
             tile_df = tile_df.sort(time_col)
 
             # Extract feature, target, and timestamp tensors
-            x = torch.from_numpy(tile_df.select(meta["features"]).to_numpy()).float()
+            if use_features:
+                x = torch.from_numpy(tile_df.select(meta["features"]).to_numpy()).float()
+            else:
+                x = torch.from_numpy(tile_df.select(meta["target"]).to_numpy()).float()
             # Copy these two tensors to suppress warning of non-writeable tensors
             y = torch.from_numpy(tile_df.select(meta["target"]).to_numpy().copy().squeeze()).float()
             t = torch.from_numpy(tile_df.select("__timestamp__").to_numpy().copy().squeeze()).float()
@@ -66,6 +69,11 @@ class TileTimeSeriesDataset(Dataset):
         return len(self.index)
 
     def __getitem__(self, idx):
+        """
+        Returns:
+            context: (batch, seq, context_dim)
+            target: (batch, seq, 1)
+        """
         tile_id, start_idx = self.index[idx]
         tensors = self.tile_tensors[tile_id]
 
