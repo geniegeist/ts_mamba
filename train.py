@@ -5,6 +5,9 @@ import hydra
 import polars as pl
 import torch
 import torch.backends.cudnn as cudnn
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import yaml
 from hydra.core.config_store import ConfigStore
 from mamba_ssm.models.config_mamba import MambaConfig
@@ -21,7 +24,7 @@ from ts_mamba.llm import MambaLMHeadModel
 from ts_mamba.loss_eval import evaluate_model_rmse, evaluate_llm
 from ts_mamba.model import TimeseriesModel, WeightedRMSELoss
 from ts_mamba.optimizer import WarmupCosineLR 
-from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm, plot_llm2
+from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm2
 
 
 config_store = ConfigStore.instance()
@@ -32,9 +35,24 @@ config_store.store(name="timeseries_deep_learning_config", node=Config)
 def main(config: Config):
     print(config)
 
+    if "RANK" in os.environ:
+        dist.init_process_group("nccl")
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+    else:
+        local_rank = 0
+
+    is_main = (not dist.is_initialized()) or dist.get_rank() == 0
+
+    if dist.is_initialized():
+        device = torch.device(f"cuda:{local_rank}")
+    else: 
+        device = torch.device(config.device)
+
+
     use_wandb = config.wandb is not None
     wandb_run = None
-    if use_wandb:
+    if is_main and use_wandb:
         wandb_run = wandb.init(
             project = config.wandb.project,
             name = config.wandb.name,
@@ -67,21 +85,30 @@ def main(config: Config):
     train_df = None
     train_dataset = None
     train_loader = None
+    train_sampler = None
 
     def load_next_shard():
-        nonlocal shard_index, train_df, train_dataset, train_loader
+        nonlocal shard_index, train_df, train_dataset, train_loader, train_sampler
 
         shard_path = train_shards[shard_index]
         train_df = pl.read_parquet(shard_path, memory_map=True)
 
         # Build dataset + loader
         train_dataset = TileTimeSeriesDataset(train_df, train_meta, context_length, use_features=config.model.model != "llm")
+
+        if dist.is_initialized():
+            train_sampler = DistributedSampler(train_dataset, shuffle=True, num_replicas=dist.get_world_size(), rank=dist.get_rank())
+
+            current_step = step if 'step' in locals() else start_step
+            train_sampler.set_epoch(current_step)
+
         train_loader = DataLoader(
             train_dataset,
             batch_size=config.batch_size,
-            shuffle=True,
+            shuffle=not dist.is_initialized(),
             num_workers=config.num_workers,
-            persistent_workers=True
+            persistent_workers=True,
+            sampler=train_sampler,
         )
 
         shard_index += 1
@@ -89,6 +116,9 @@ def main(config: Config):
             shard_index = 0
 
         print(f"Loaded shard: {shard_path}")
+
+        if dist.is_initialized():
+            dist.barrier()
 
     load_next_shard()
     train_iter = iter(train_loader)
@@ -121,7 +151,7 @@ def main(config: Config):
             rms_norm=config.model.rms_norm,
             residual_in_fp32=config.model.residual_in_fp32,
             dtype=torch.bfloat16,
-            device=config.device,
+            device=device,
         )
     elif config.model.model == 'llm':
         model = MambaLMHeadModel(
@@ -140,14 +170,18 @@ def main(config: Config):
                 tie_embeddings=config.model.tie_embeddings,
             ),
             dtype=torch.bfloat16,
-            device=config.device,
+            device=device,
         )
         pass
     else:
         raise ValueError(f"Invalid config.model.model: {config.model.model}")
-    model = model.to(config.device)
 
-    if config.device == 'cuda':
+    model = model.to(device)
+
+    if dist.is_initialized():
+        model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+
+    if device.type == 'cuda':
         cudnn.benchmark = True
 
 
@@ -170,10 +204,16 @@ def main(config: Config):
     scheduler = WarmupCosineLR(optimizer, warmup_steps=config.warmup_steps, total_steps=config.total_steps)
 
     if config.resume.enabled and config.resume.checkpoint_path is not None:
-        print('==> Resume from checkpoint..')
-        ckpt = torch.load(config.resume.checkpoint_path, map_location=config.device)
+        if is_main:
+            print('==> Resume from checkpoint..')
 
-        model.load_state_dict(ckpt['model'], strict=True)
+        ckpt = torch.load(config.resume.checkpoint_path, map_location=device)
+
+        if isinstance(model, DDP):
+            model.module.load_state_dict(ckpt['model'], strict=True)
+        else:
+            model.load_state_dict(ckpt['model'], strict=True)
+
 
         if 'optimizer' in ckpt:
             optimizer.load_state_dict(ckpt['optimizer'])
@@ -185,15 +225,17 @@ def main(config: Config):
         min_eval_loss = ckpt.get('min_val_loss', min_eval_loss)
         best_step = ckpt.get('best_step', best_step)
 
-        print(f"Resumed from step {start_step} | "
-              f"min_val_loss={min_eval_loss:.4f} best_step={best_step}")
+        if is_main:
+            print(f"Resumed from step {start_step} | "
+                  f"min_val_loss={min_eval_loss:.4f} best_step={best_step}")
 
-    if use_wandb:
+    if is_main and use_wandb:
         wandb_run.watch(model, log="all")
 
     ema_beta = 0.9 # EMA decay factor
     smooth_train_loss = 0
     smooth_mae = 0
+
 
     print('==> Start training..')
     pbar = tqdm(range(start_step, config.total_steps), desc="Training")
@@ -207,83 +249,98 @@ def main(config: Config):
             batch = next(train_iter)
 
         last_step = step == config.total_steps - 1
-        samples_so_far += config.batch_size
+
+        if dist.is_initialized():
+            world_size = dist.get_world_size()
+            samples_so_far += config.batch_size * world_size
+        else:
+            samples_so_far += config.batch_size
+
         model.eval()
         # once in a while: evaluate model
-        if last_step or (step % config.eval_every == 0 and not (step == 0 and not config.validate_at_start)):
-            if config.loss == 'rmse':
-                val_res = evaluate_model_rmse(
-                    model=model,
-                    criterion=criterion,
-                    loader=val_loader,
-                    device=config.device,
-                )
+        if (last_step or (step % config.eval_every == 0 and not (step == 0 and not config.validate_at_start))):
+            if is_main:
+                if config.loss == 'rmse':
+                    val_res = evaluate_model_rmse(
+                        model=model.module if isinstance(model, DDP) else model,
+                        criterion=criterion,
+                        loader=val_loader,
+                        device=device,
+                    )
 
-                if val_res["loss"] < min_eval_loss:
-                    min_eval_loss = val_res["loss"]
-                    best_step = step
+                    if val_res["loss"] < min_eval_loss:
+                        min_eval_loss = val_res["loss"]
+                        best_step = step
 
-                wandb_run.log({
-                    "samples_so_far": samples_so_far,
-                    "val_loss": val_res["loss"],
-                    "val_rmse": val_res["rmse"],
-                    "val_mae": val_res["mae"],
-                    "val_zero_mae": val_res["zero_mae"],
-                    "val_pos_mae": val_res["pos_mae"],
-                    "min_val_loss": min_eval_loss,
-                    "best_step": best_step,
-                })
-            elif config.loss == 'cross_entropy':
-                val_res = evaluate_llm(
-                    model=model,
-                    criterion=criterion,
-                    loader=val_loader,
-                    device=config.device,
-                )
+                    wandb_run.log({
+                        "samples_so_far": samples_so_far,
+                        "val_loss": val_res["loss"],
+                        "val_rmse": val_res["rmse"],
+                        "val_mae": val_res["mae"],
+                        "val_zero_mae": val_res["zero_mae"],
+                        "val_pos_mae": val_res["pos_mae"],
+                        "min_val_loss": min_eval_loss,
+                        "best_step": best_step,
+                    })
+                elif config.loss == 'cross_entropy':
+                    val_res = evaluate_llm(
+                        model=model.module if isinstance(model, DDP) else model,
+                        criterion=criterion,
+                        loader=val_loader,
+                        device=device,
+                    )
 
-                if val_res["loss"] < min_eval_loss:
-                    min_eval_loss = val_res["loss"]
-                    best_step = step
+                    if val_res["loss"] < min_eval_loss:
+                        min_eval_loss = val_res["loss"]
+                        best_step = step
 
-                wandb_run.log({
-                    "samples_so_far": samples_so_far,
-                    "val_loss": val_res["loss"],
-                    "val_mae": val_res["mae"],
-                    "val_rmse": val_res["rmse"],
-                    "min_val_loss": min_eval_loss,
-                    "best_step": best_step,
-                })
+                    wandb_run.log({
+                        "samples_so_far": samples_so_far,
+                        "val_loss": val_res["loss"],
+                        "val_mae": val_res["mae"],
+                        "val_rmse": val_res["rmse"],
+                        "min_val_loss": min_eval_loss,
+                        "best_step": best_step,
+                    })
+
+            if dist.is_initialized():
+                dist.barrier()
+
 
 
         # once in a while: sample from model
         if config is not None and config.sample_every > 0 and (last_step or (step % config.sample_every == 0)):
-            if config.loss == 'rmse':
-                plot_forecast_vs_truth_rmse(
-                    model=model,
-                    loader=sample_loader,
-                    device=config.device,
-                    wandb_run=wandb_run,
-                    epoch=step,
-                )
-            elif config.loss == 'cross_entropy':
-                plot_llm2(
-                    model=model,
-                    loader=sample_loader,
-                    device=config.device,
-                    wandb_run=wandb_run,
-                    epoch=step
-                )
-                pass
+            if is_main:
+                if config.loss == 'rmse':
+                    plot_forecast_vs_truth_rmse(
+                        model=model.module if isinstance(model, DDP) else model,
+                        loader=sample_loader,
+                        device=device,
+                        wandb_run=wandb_run,
+                        epoch=step,
+                    )
+                elif config.loss == 'cross_entropy':
+                    plot_llm2(
+                        model=model.module if isinstance(model, DDP) else model,
+                        loader=sample_loader,
+                        device=device,
+                        wandb_run=wandb_run,
+                        epoch=step
+                    )
+
+            if dist.is_initialized():
+                dist.barrier()
 
         # Training
-        wandb_run.log({ "last_lr": scheduler.get_last_lr() })
+        if is_main:
+            wandb_run.log({ "last_lr": scheduler.get_last_lr() })
         model.train()
 
         obs, targets = batch["context"], batch["target"]
         if config.loss == 'cross_entropy':
             obs, targets = obs.squeeze(-1), targets.squeeze(-1)
             targets = targets[:, -config.train.num_last_tokens:].reshape(-1)
-        obs, targets = obs.to(config.device), targets.to(config.device)
+        obs, targets = obs.to(device), targets.to(device)
 
         optimizer.zero_grad()
 
@@ -313,7 +370,7 @@ def main(config: Config):
                 (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
             )
 
-            if step % 10 == 0:
+            if is_main and step % 10 == 0:
                 wandb_run.log({
                     "samples_so_far": samples_so_far,
                     "train_loss": debiased_smooth_loss,
@@ -326,7 +383,7 @@ def main(config: Config):
                 (step, config.total_steps, debiased_smooth_loss)
             )
 
-            if step % 10 == 0:
+            if is_main and step % 10 == 0:
                 wandb_run.log({
                     "samples_so_far": samples_so_far,
                     "train_loss": debiased_smooth_loss,
@@ -334,11 +391,11 @@ def main(config: Config):
                 })
 
 
-        if config.save_every >= 0 and step % config.save_every == 0:
+        if is_main and config.save_every >= 0 and step % config.save_every == 0:
             print("Save checkpoint")
 
             state = {
-                'model': model.state_dict(),
+                'model': model.module.state_dict() if isinstance(model, DDP) else model.state_dict(),
                 'optimizer': optimizer.state_dict(),
                 'scheduler': scheduler.state_dict(),
                 'step': step,
@@ -351,12 +408,13 @@ def main(config: Config):
             ckpt_path = f'./checkpoint/ckpt_{config.wandb.name}_step{step}.pth'
             torch.save(state, ckpt_path)
 
-            if use_wandb:
+            if is_main and use_wandb:
                 artifact = wandb.Artifact(f'{wandb_run.id}-artifact-step{step}', type='model')
                 artifact.add_file(ckpt_path)
                 wandb_run.log_artifact(artifact)
 
-    wandb_run.finish()
+    if is_main:
+        wandb_run.finish()
 
 
 
