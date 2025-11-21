@@ -87,6 +87,8 @@ def main(config: Config):
     train_loader = None
     train_sampler = None
 
+    start_step = 0
+
     def load_next_shard():
         nonlocal shard_index, train_df, train_dataset, train_loader, train_sampler
 
@@ -187,7 +189,6 @@ def main(config: Config):
 
     min_eval_loss = float("inf")
     best_step = -1
-    start_step = 0
     samples_so_far = 0
 
     criterion = None
