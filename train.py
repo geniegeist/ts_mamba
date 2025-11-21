@@ -366,10 +366,11 @@ def main(config: Config):
             smooth_mae = ema_beta * smooth_mae + (1 - ema_beta) * mae.item() # EMA the training loss
             debiased_smooth_mae = smooth_mae / (1 - ema_beta**(step + 1))
 
-            pbar.set_description(
-                'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
-                (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
-            )
+            if is_main:
+                pbar.set_description(
+                    'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
+                    (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
+                )
 
             if is_main and step % 10 == 0:
                 wandb_run.log({
@@ -379,10 +380,11 @@ def main(config: Config):
                     "last_lr": scheduler.get_last_lr(),
                 })
         elif config.loss == 'cross_entropy':
-            pbar.set_description(
-                'Step: (%d/%d) | Train loss: %.6f' %
-                (step, config.total_steps, debiased_smooth_loss)
-            )
+            if is_main:
+                pbar.set_description(
+                    'Step: (%d/%d) | Train loss: %.6f' %
+                    (step, config.total_steps, debiased_smooth_loss)
+                )
 
             if is_main and step % 10 == 0:
                 wandb_run.log({
