@@ -173,6 +173,7 @@ class MAELoss(nn.Module):
     def __init__(self, k: int):
         super().__init__()
         self.loss = torch.nn.L1Loss()
+        self.k = k
 
     def forward(self, preds, targets):
         return self.loss(preds[-self.k:], targets[-self.k:])
