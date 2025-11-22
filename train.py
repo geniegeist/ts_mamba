@@ -302,6 +302,12 @@ def main(config: Config):
                         "val_loss": val_res["loss"],
                         "val_mae": val_res["mae"],
                         "val_rmse": val_res["rmse"],
+                        "val_crps": val_res["crps"],
+                        "val_pinball_10": val_res["pinball_10"],
+                        "val_pinball_50": val_res["pinball_50"],
+                        "val_pinball_90": val_res["pinball_90"],
+                        "val_coverage": val_res["coverage_10_90"],
+                        "val_interval_width_10_90": val_res["interval_width_10_90"],
                         "min_val_loss": min_eval_loss,
                         "best_step": best_step,
                     })
