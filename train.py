@@ -212,25 +212,26 @@ def main(config: Config):
 
         ckpt = torch.load(config.resume.checkpoint_path, map_location=device)
 
+
         if isinstance(model, DDP):
             model.module.load_state_dict(ckpt['model'], strict=True)
         else:
             model.load_state_dict(ckpt['model'], strict=True)
 
+        if not config.resume.only_model:
+            if 'optimizer' in ckpt:
+                optimizer.load_state_dict(ckpt['optimizer'])
+            if 'scheduler' in ckpt:
+                scheduler.load_state_dict(ckpt['scheduler'])
 
-        if 'optimizer' in ckpt:
-            optimizer.load_state_dict(ckpt['optimizer'])
-        if 'scheduler' in ckpt:
-            scheduler.load_state_dict(ckpt['scheduler'])
+            start_step = ckpt.get('step', 0) + 1
+            samples_so_far = ckpt.get('samples_so_far', 0)
+            min_eval_loss = ckpt.get('min_val_loss', min_eval_loss)
+            best_step = ckpt.get('best_step', best_step)
 
-        start_step = ckpt.get('step', 0) + 1
-        samples_so_far = ckpt.get('samples_so_far', 0)
-        min_eval_loss = ckpt.get('min_val_loss', min_eval_loss)
-        best_step = ckpt.get('best_step', best_step)
-
-        if is_main:
-            print(f"Resumed from step {start_step} | "
-                  f"min_val_loss={min_eval_loss:.4f} best_step={best_step}")
+            if is_main:
+                print(f"Resumed from step {start_step} | "
+                      f"min_val_loss={min_eval_loss:.4f} best_step={best_step}")
 
     if is_main and use_wandb:
         wandb_run.watch(model, log="all")
