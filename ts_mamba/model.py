@@ -169,6 +169,14 @@ class RMSELoss(nn.Module):
         return torch.sqrt(torch.mean((preds[:,-1] - targets[:,-1]) ** 2))
         #return torch.sqrt(torch.mean((preds - targets) ** 2))
 
+class MAELoss(nn.Module):
+    def __init__(self, k: int):
+        super().__init__()
+        self.loss = torch.nn.L1Loss()
+
+    def forwward(self, preds, targets):
+        return self.loss(preds[-self.k:], targets[-self.k:])
+
 class WeightedRMSELoss(nn.Module):
     def __init__(self, decay=0.99):
         super().__init__()

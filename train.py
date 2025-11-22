@@ -22,7 +22,7 @@ from ts_mamba.common import DummyWandb
 from ts_mamba.dataset import TileTimeSeriesDataset
 from ts_mamba.llm import MambaLMHeadModel 
 from ts_mamba.loss_eval import evaluate_model_rmse, evaluate_llm
-from ts_mamba.model import TimeseriesModel, WeightedRMSELoss
+from ts_mamba.model import TimeseriesModel, WeightedRMSELoss, MAELoss
 from ts_mamba.optimizer import WarmupCosineLR 
 from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm2
 
@@ -195,6 +195,8 @@ def main(config: Config):
 
     if config.loss == 'rmse':
         criterion = WeightedRMSELoss(decay=config.rmse_decay)
+    elif config.loss == 'mae':
+        criterion = MAELoss(k=336)
     elif config.loss == 'cross_entropy':
         criterion = torch.nn.CrossEntropyLoss()
     else:
@@ -312,7 +314,7 @@ def main(config: Config):
         # once in a while: sample from model
         if config is not None and config.sample_every > 0 and (last_step or (step % config.sample_every == 0)):
             if is_main:
-                if config.loss == 'rmse':
+                if config.model.model == 'mamba':
                     plot_forecast_vs_truth_rmse(
                         model=model.module if isinstance(model, DDP) else model,
                         loader=sample_loader,
@@ -320,7 +322,7 @@ def main(config: Config):
                         wandb_run=wandb_run,
                         epoch=step,
                     )
-                elif config.loss == 'cross_entropy':
+                elif config.model.model == 'llm':
                     plot_llm2(
                         model=model.module if isinstance(model, DDP) else model,
                         loader=sample_loader,
@@ -361,24 +363,25 @@ def main(config: Config):
         smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * loss.item() # EMA the training loss
         debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
 
-        if config.loss == 'rmse':
-            mae = torch.mean(torch.abs(preds[:,-1] - targets[:,-1]))
-            smooth_mae = ema_beta * smooth_mae + (1 - ema_beta) * mae.item() # EMA the training loss
-            debiased_smooth_mae = smooth_mae / (1 - ema_beta**(step + 1))
+        if config.loss == 'rmse' or config.loss == 'mae':
+            with torch.no_grad():
+                mae = torch.mean(torch.abs(preds[:,-1] - targets[:,-1]))
+                smooth_mae = ema_beta * smooth_mae + (1 - ema_beta) * mae.item() # EMA the training loss
+                debiased_smooth_mae = smooth_mae / (1 - ema_beta**(step + 1))
 
-            if is_main:
-                pbar.set_description(
-                    'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
-                    (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
-                )
+                if is_main:
+                    pbar.set_description(
+                        'Step: (%d/%d) | Train loss: %.6f | MAE: %.6f' %
+                        (step, config.total_steps, debiased_smooth_loss, debiased_smooth_mae)
+                    )
 
-            if is_main and step % 10 == 0:
-                wandb_run.log({
-                    "samples_so_far": samples_so_far,
-                    "train_loss": debiased_smooth_loss,
-                    "train_mae": debiased_smooth_mae,
-                    "last_lr": scheduler.get_last_lr(),
-                })
+                if is_main and step % 10 == 0:
+                    wandb_run.log({
+                        "samples_so_far": samples_so_far,
+                        "train_loss": debiased_smooth_loss,
+                        "train_mae": debiased_smooth_mae,
+                        "last_lr": scheduler.get_last_lr(),
+                    })
         elif config.loss == 'cross_entropy':
             if is_main:
                 pbar.set_description(
