@@ -96,7 +96,7 @@ def main(config: Config):
             t = target_timestamp[:,-1]
 
             preds.append(logits.cpu())
-            tile_ids.extend(tile_id)
+            tile_ids.extend(tile_id[0])
             ts.append(t)
 
     preds = torch.cat(preds, dim=0)
