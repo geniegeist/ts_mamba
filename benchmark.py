@@ -2,6 +2,7 @@ import hydra
 import polars as pl
 import torch
 import yaml
+from datetime import datetime
 from hydra.core.config_store import ConfigStore
 from mamba_ssm.models.config_mamba import MambaConfig
 from torch.utils.data import DataLoader
@@ -18,6 +19,8 @@ config_store.store(name="timeseries_deep_learning_config", node=Config)
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(config: Config):
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     device = torch.device(config.device)
 
     with open(config.benchmark.test_meta, "r") as f:
@@ -111,7 +114,10 @@ def main(config: Config):
         schema=["tile_id", "reference_time", "logits"],
         orient="row"
     ).with_columns(
-        pl.col("reference_time").cast(pl.Datetime).alias("reference_time")
+        pl.col("reference_time")
+        .cast(pl.Datetime)
+        .round(f"{test_meta['config']['time_res']}m")
+        .alias("reference_time")
     ).with_columns(
         pl.col("reference_time")
         .dt.replace_time_zone("UTC")  # assume timestamps are in UTC
@@ -119,10 +125,8 @@ def main(config: Config):
         .alias("reference_time_local")
     )
 
-    df.write_parquet("benchmark.parquet")
+    df.write_parquet(f"benchmark/benchmark_{ts}.parquet")
     print("Written")
-
-
 
 if __name__ == "__main__":
     main()
