@@ -19,7 +19,7 @@ config_store.store(name="timeseries_deep_learning_config", node=Config)
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(config: Config):
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     device = torch.device(config.device)
 
@@ -126,7 +126,7 @@ def main(config: Config):
         .alias("reference_time_local")
     )
 
-    df.write_parquet(f"benchmark/benchmark_{ts}.parquet")
+    df.write_parquet(f"benchmark/benchmark_{timestamp_str}.parquet")
     print("Written")
 
 if __name__ == "__main__":
