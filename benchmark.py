@@ -116,6 +116,7 @@ def main(config: Config):
     ).with_columns(
         pl.col("reference_time")
         .cast(pl.Datetime)
+        .dt
         .round(f"{test_meta['config']['time_res']}m")
         .alias("reference_time")
     ).with_columns(
