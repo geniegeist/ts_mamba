@@ -29,7 +29,7 @@ def main(config: Config):
     test_dataset = TileTimeSeriesDataset(df_test, test_meta, context_length, use_features=config.model.model != "llm")
     test_loader = DataLoader(
         test_dataset,
-        batch_size=64,
+        batch_size=160,
         num_workers=config.num_workers,
         persistent_workers=True,
     )
