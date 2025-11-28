@@ -19,6 +19,10 @@ class Model:
     vocab_size: int
     tie_embeddings: bool
     use_llm_init: bool
+    quantiles: list[float]
+    quantile_median_idx: int
+    quantile_10_idx: int
+    quantile_90_idx: int
 
 @dataclass
 class DatasetConfig:

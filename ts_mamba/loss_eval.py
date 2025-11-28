@@ -250,3 +250,78 @@ def evaluate_model_rmse(model, criterion, loader, device) -> dict[str, float]:
         "pos_mae": avg_eval_pos_mae,
     }
 
+def evaluate_model_quantile(model, criterion, quantile_idx, loader, device) -> dict[str, float]:
+    eval_loss = 0
+    eval_rmse = 0
+    eval_mae = 0
+    eval_zero_mae = 0
+    eval_pos_mae = 0
+    eval_pos2_mae = 0
+
+    rmse_crit = RMSELoss()
+
+    with torch.no_grad():
+        pbar = tqdm(enumerate(loader))
+        for batch_idx, data in pbar:
+            obs, targets = data["context"], data["target"]
+            obs, targets = obs.to(device), targets.to(device)
+            preds = model(obs)
+            loss = criterion(preds, targets)
+
+            point_preds = preds[:,:,quantile_idx].unsqueeze(-1)
+            rmse = rmse_crit(point_preds, targets)
+            mae = torch.mean(torch.abs(point_preds[:,-1] - targets[:,-1]))
+
+            # Make mask for samples whose last target value == 0
+            zero_mask = (targets[:, -1, 0] == 0)
+            pos_mask = (targets[:, -1, 0] > 0)
+            pos2_mask = (targets[:, -1, 0] > 1)
+
+            # Select only the last timestep for preds and targets
+            preds_last = point_preds[:, -1, 0]
+            targets_last = targets[:, -1, 0]
+
+            # Safe MAE computation
+            if zero_mask.any():
+                zero_mae = torch.mean(torch.abs(preds_last[zero_mask] - targets_last[zero_mask]))
+            else:
+                zero_mae = torch.tensor(0.0, device=preds.device)
+
+            if pos_mask.any():
+                pos_mae = torch.mean(torch.abs(preds_last[pos_mask] - targets_last[pos_mask]))
+            else:
+                pos_mae = torch.tensor(0.0, device=preds.device)
+
+            if pos2_mask.any():
+                pos2_mae = torch.mean(torch.abs(preds_last[pos2_mask] - targets_last[pos2_mask]))
+            else:
+                pos2_mae = torch.tensor(0.0, device=preds.device)
+
+            eval_loss += loss.item()
+            eval_rmse += rmse.item()
+            eval_mae += mae.item()
+            eval_zero_mae += zero_mae.item()
+            eval_pos_mae += pos_mae.item()
+            eval_pos2_mae += pos2_mae.item()
+
+            pbar.set_description(
+                'Val Batch Idx: (%d/%d) | Loss: %.3f | RMSE: %.3f | MAE: %.3f | zero-MAE: %.3f | pos-MAE: %.3f | >1-MAE: %.3f' %
+                    (batch_idx, len(loader), eval_loss/(batch_idx+1), eval_rmse/(batch_idx+1), eval_mae/(batch_idx+1), eval_zero_mae/(batch_idx+1), eval_pos_mae/(batch_idx+1), eval_pos2_mae/(batch_idx+1))
+            )
+
+        avg_eval_loss = eval_loss / len(loader)
+        avg_eval_loss_last = eval_rmse / len(loader)
+        avg_eval_mae = eval_mae / len(loader)
+        avg_eval_zero_mae = eval_zero_mae / len(loader)
+        avg_eval_pos_mae = eval_pos_mae / len(loader)
+        avg_eval_pos2_mae = eval_pos2_mae / len(loader)
+
+    return {
+        "loss": avg_eval_loss,
+        "rmse": avg_eval_loss_last,
+        "mae": avg_eval_mae,
+        "zero_mae": avg_eval_zero_mae,
+        "pos_mae": avg_eval_pos_mae,
+        "pos2_mae": avg_eval_pos2_mae,
+    }
+
