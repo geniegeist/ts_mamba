@@ -8,6 +8,7 @@ import torch.backends.cudnn as cudnn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
+from ts_mamba.quantile_model import MambaQuantileHeadModel, QuantileRegressionLoss 
 import yaml
 from hydra.core.config_store import ConfigStore
 from mamba_ssm.models.config_mamba import MambaConfig
@@ -21,10 +22,10 @@ from config import Config
 from ts_mamba.common import DummyWandb
 from ts_mamba.dataset import TileTimeSeriesDataset
 from ts_mamba.llm import MambaLMHeadModel 
-from ts_mamba.loss_eval import evaluate_model_rmse, evaluate_llm
+from ts_mamba.loss_eval import evaluate_model_rmse, evaluate_llm, evaluate_model_quantile
 from ts_mamba.model import TimeseriesModel, WeightedRMSELoss, MAELoss
 from ts_mamba.optimizer import WarmupCosineLR 
-from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm2
+from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm2, plot_quantile
 
 
 config_store = ConfigStore.instance()
@@ -198,7 +199,23 @@ def main(config: Config):
             dtype=torch.bfloat16,
             device=device,
         )
-        pass
+    elif config.model.model == 'quantile':
+        model = MambaQuantileHeadModel(
+            d_input=d_input,
+            d_model=config.model.d_model,
+            d_intermediate=config.model.d_intermediate,
+            quantiles=config.model.quantiles,
+            n_layer=config.model.n_layers,
+            ssm_cfg=config.model.ssm_cfg,
+            attn_layer_idx=config.model.attn_layer_idx,
+            attn_cfg=config.model.attn_cfg,
+            rms_norm=config.model.rms_norm,
+            residual_in_fp32=config.model.residual_in_fp32,
+            fused_add_norm=True,
+            use_llm_init = config.model.use_llm_init,
+            dtype=torch.bfloat16,
+            device=device,
+        )
     else:
         raise ValueError(f"Invalid config.model.model: {config.model.model}")
 
@@ -232,6 +249,8 @@ def main(config: Config):
         criterion = MAELoss(k=336)
     elif config.loss == 'cross_entropy':
         criterion = torch.nn.CrossEntropyLoss()
+    elif config.loss == 'quantile':
+        criterion = QuantileRegressionLoss(quantiles=config.model.quantiles, device=device, dtype=torch.bfloat16)
     else:
         raise ValueError(f"Invalid config.loss: {config.loss}")
 
@@ -345,6 +364,32 @@ def main(config: Config):
                         "min_val_loss": min_eval_loss,
                         "best_step": best_step,
                     })
+                elif config.loss == 'quantile':
+                    val_res = evaluate_model_quantile(
+                        model=model.module if isinstance(model, DDP) else model,
+                        quantile_idx=config.model.quantile_median_idx,
+                        criterion=criterion,
+                        loader=val_loader,
+                        device=device,
+                    )
+
+                    if val_res["loss"] < min_eval_loss:
+                        min_eval_loss = val_res["loss"]
+                        best_step = step
+
+                    wandb_run.log({
+                        "samples_so_far": samples_so_far,
+                        "val_loss": val_res["loss"],
+                        "val_rmse": val_res["rmse"],
+                        "val_mae": val_res["mae"],
+                        "val_zero_mae": val_res["zero_mae"],
+                        "val_pos_mae": val_res["pos_mae"],
+                        "val_pos2_mae": val_res["pos2_mae"],
+                        "min_val_loss": min_eval_loss,
+                        "best_step": best_step,
+                    })
+
+
 
             if dist.is_initialized():
                 dist.barrier()
@@ -370,6 +415,18 @@ def main(config: Config):
                         wandb_run=wandb_run,
                         epoch=step
                     )
+                elif config.model.model == 'quantile':
+                    plot_quantile(
+                        model=model.module if isinstance(model, DDP) else model,
+                        loader=sample_loader,
+                        device=device,
+                        wandb_run=wandb_run,
+                        epoch=step,
+                        q50_idx=config.model.quantile_median_idx,
+                        q10_idx=config.model.quantile_10_idx,
+                        q90_idx=config.model.quantile_90_idx,
+                    )
+
 
             if dist.is_initialized():
                 dist.barrier()
@@ -392,6 +449,8 @@ def main(config: Config):
         elif config.model.model == "llm":
             preds = model(obs, num_last_tokens=config.train.num_last_tokens)
             preds = preds.logits.reshape(-1, preds.logits.size(-1))
+        elif config.model.model == "quantile":
+            preds = model(obs)
 
         loss = criterion(preds, targets)
         loss.backward()
@@ -422,7 +481,7 @@ def main(config: Config):
                         "train_mae": debiased_smooth_mae,
                         "last_lr": scheduler.get_last_lr(),
                     })
-        elif config.loss == 'cross_entropy':
+        elif config.loss == 'cross_entropy' or config.loss == 'quantile':
             if is_main:
                 pbar.set_description(
                     'Step: (%d/%d) | Train loss: %.6f' %
@@ -435,7 +494,6 @@ def main(config: Config):
                     "train_loss": debiased_smooth_loss,
                     "last_lr": scheduler.get_last_lr(),
                 })
-
 
         if is_main and config.save_every >= 0 and step % config.save_every == 0:
             print("Save checkpoint")
