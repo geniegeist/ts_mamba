@@ -180,12 +180,12 @@ def main(config: Config):
         model = MambaQuantileHeadModel(
             d_input=d_input,
             d_model=config.model.d_model,
+            d_intermediate=config.model.d_intermediate,
             quantiles=config.model.quantiles,
             n_layer=config.model.n_layers,
             ssm_cfg=config.model.ssm_cfg,
             attn_layer_idx=config.model.attn_layer_idx,
             attn_cfg=config.model.attn_cfg,
-            norm_epsilon=config.model.norm_epsilon,
             rms_norm=config.model.rms_norm,
             residual_in_fp32=config.model.residual_in_fp32,
             fused_add_norm=True,
