@@ -218,7 +218,7 @@ def main(config: Config):
     elif config.loss == 'cross_entropy':
         criterion = torch.nn.CrossEntropyLoss()
     elif config.loss == 'quantile':
-        criterion = QuantileRegressionLoss(quantiles=config.model.quantiles)
+        criterion = QuantileRegressionLoss(quantiles=config.model.quantiles, device=device, dtype=torch.bfloat16)
     else:
         raise ValueError(f"Invalid config.loss: {config.loss}")
 

@@ -280,21 +280,16 @@ class QuantileRegressionLoss(nn.Module):
     mask:   (B, H) optional
     """
     
-    def __init__(self, quantiles):
+    def __init__(self, quantiles, device, dtype):
         super().__init__()
-        self.register_buffer("quantiles", torch.as_tensor(quantiles))
+        self.register_buffer("quantiles", torch.as_tensor(quantiles, device=device, dtype=dtype))
 
     def forward(
         self,
         pred,          # (B, H, Q)
         target,        # (B, H)
     ):
-        
-        # Expand target for broadcasting: (B, H) -> (B, H, 1)
-        target_expanded = target.unsqueeze(-1)
-
-        # Error term z - z_hat_q
-        error = target_expanded - pred  # (B, H, Q)
+        error = target - pred  # (B, H, Q)
 
         # Make quantiles broadcastable: (Q,) -> (1,1,Q)
         q = self.quantiles.view(1, 1, -1)
