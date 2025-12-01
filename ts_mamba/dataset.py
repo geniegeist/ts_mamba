@@ -90,3 +90,84 @@ class TileTimeSeriesDataset(Dataset):
             "target": y_target,
             "target_timestamp": y_timestamp,
         }
+
+
+class TileTimeSeriesWindowedDataset(Dataset):
+    def __init__(self, df: pl.DataFrame, meta: dict,
+                 context_length: int, use_features: bool,
+                 stride: int = None):
+        """
+        A dataset that returns windows with a configurable stride.
+
+        Args:
+            context_length: number of past timesteps to include
+            stride: step size between windows.
+                    If None → default = context_length (non-overlapping)
+        """
+        self.meta = meta
+        self.context_length = context_length
+        self.horizon: int = 1
+
+        self.stride = stride if stride is not None else context_length
+
+        tile_col = meta["tile_column"]
+        time_col = meta["time_column"]
+
+        df = df.with_columns(pl.col(time_col).dt.timestamp().alias("__timestamp__"))
+
+        self.tile_groups = df.partition_by(tile_col, as_dict=True)
+        self.tile_tensors = {}
+        self.index = []
+
+        for tile_id, tile_df in self.tile_groups.items():
+
+            tile_df = tile_df.sort(time_col)
+
+            if use_features:
+                x = torch.from_numpy(tile_df.select(meta["features"]).to_numpy()).float()
+                y = torch.from_numpy(tile_df.select(meta["target"]).to_numpy().copy().squeeze()).float()
+            else:
+                x = torch.from_numpy(tile_df.select(meta["target"]).to_numpy().copy()).long()
+                y = torch.from_numpy(tile_df.select(meta["target"]).to_numpy().copy().squeeze()).long()
+
+            t = torch.from_numpy(tile_df.select("__timestamp__").to_numpy().copy().squeeze()).float()
+
+            length = len(tile_df)
+            min_required = self.context_length + self.horizon
+
+            if length < min_required:
+                print(f"Skipping tile {tile_id}: only {length} timesteps, requires >= {min_required}")
+                continue
+
+            self.tile_tensors[tile_id] = {
+                "x": x,
+                "y": y,
+                "t": t,
+                "length": length,
+            }
+
+            # ----- Windowing with stride -----
+            max_start = length - (self.context_length + self.horizon)
+
+            starts = list(range(0, max_start + 1, self.stride))
+            self.index.extend([(tile_id, s) for s in starts])
+
+    def __len__(self):
+        return len(self.index)
+
+    def __getitem__(self, idx):
+        tile_id, start_idx = self.index[idx]
+        tensors = self.tile_tensors[tile_id]
+
+        c_len, h_len = self.context_length, self.horizon
+
+        x_context = tensors["x"][start_idx:start_idx + c_len]
+        y_target = tensors["y"][start_idx + h_len:start_idx + c_len + h_len].unsqueeze(-1)
+        y_timestamp = tensors["t"][start_idx + h_len:start_idx + c_len + h_len].unsqueeze(-1)
+
+        return {
+            "tile_id": tile_id,
+            "context": x_context,
+            "target": y_target,
+            "target_timestamp": y_timestamp,
+        }

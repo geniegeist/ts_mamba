@@ -66,6 +66,7 @@ class Config:
 
     device: str
     context_window_in_days: int
+    stride: int
     num_workers: int
     batch_size: int
     loss: str

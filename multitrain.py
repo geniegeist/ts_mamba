@@ -21,7 +21,7 @@ from tqdm.auto import tqdm
 import wandb
 from config import Config
 from ts_mamba.common import DummyWandb
-from ts_mamba.dataset import TileTimeSeriesDataset, TileTimeSeriesNonOverlappingDataset
+from ts_mamba.dataset import TileTimeSeriesDataset, TileTimeSeriesWindowedDataset
 from ts_mamba.llm import MambaLMHeadModel 
 from ts_mamba.loss_eval import evaluate_model_rmse, evaluate_llm, evaluate_model_quantile
 from ts_mamba.model import TimeseriesModel, WeightedRMSELoss, MAELoss
@@ -119,20 +119,13 @@ def main(config: Config):
         train_df = pl.read_parquet(shard_path, memory_map=True)
 
         # Build dataset + loader
-        if config.overlapping_train_data:
-            train_dataset = TileTimeSeriesDataset(
-                train_df,
-                train_meta,
-                context_length,
-                use_features=config.model.model != "llm"
-            )
-        else:
-            train_dataset = TileTimeSeriesNonOverlappingDataset(
-                train_df,
-                train_meta,
-                context_length,
-                use_features=config.model.model != "llm"
-            )
+        train_dataset = TileTimeSeriesWindowedDataset(
+            train_df,
+            meta=train_meta,
+            context_length=context_length,
+            use_features=config.model.model != "llm",
+            stride=config.stride
+        )
 
         # IMPORTANT: now that each rank has different data, do NOT use DistributedSampler
         train_sampler = None
