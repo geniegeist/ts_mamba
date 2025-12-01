@@ -1,5 +1,6 @@
 import glob
 import os
+import random
 
 import hydra
 import polars as pl
@@ -86,6 +87,7 @@ def main(config: Config):
     # ---- Train shards setup ----
     print("=> Load training shards")
     train_shards = sorted(glob.glob(config.dataset.train.data))
+    random.shuffle(train_shards)
 
 
     if world_size > len(train_shards):
