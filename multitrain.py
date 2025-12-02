@@ -145,10 +145,6 @@ def main(config: Config):
 
         print(f"[Rank {rank}] Loaded shard: {shard_path}")
 
-        # Barrier is optional here; keeps ranks roughly in sync but not required
-        if dist.is_initialized():
-            dist.barrier()
-
     load_next_shard()
     train_iter = iter(train_loader)
 
