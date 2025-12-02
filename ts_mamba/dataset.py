@@ -241,7 +241,7 @@ class TileTimeSeriesWindowedDataset(Dataset):
                 t = torch.from_numpy(seg_df.select("__timestamp__").to_numpy().copy().squeeze()).float()
 
                 # unique segment ID
-                seg_id = f"{tile_id}__{seg_df['__segment__'][0].item()}"
+                seg_id = f"{tile_id}__{int(seg_df['__segment__'][0])}"
 
                 self.tile_tensors[seg_id] = {
                     "x": x,
