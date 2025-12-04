@@ -64,11 +64,13 @@ class Config:
     train: Train
     benchmark: Benchmark
 
-    device: str
+    total_batch_size: int # how many tokens to process per iteration, measured in tokens
+    device_batch_size: int # set as high as possible until oom, measured in (context_length, d_input)
     context_window_in_days: int
     stride: int
     num_workers: int
     batch_size: int
     loss: str
+    use_covariates: bool
 
     validate_at_start: bool
