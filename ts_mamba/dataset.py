@@ -177,12 +177,12 @@ class TileTimeSeriesWindowedDataset(Dataset):
 
     def __init__(self, df: pl.DataFrame, meta: dict,
                  context_length: int, use_features: bool,
-                 stride: int = None):
+                 stride: int = 1):
 
         self.meta = meta
         self.context_length = context_length
         self.horizon: int = 1
-        self.stride = stride if stride is not None else 1
+        self.stride = stride
 
         tile_col = meta["tile_column"]
         time_col = meta["time_column"]
