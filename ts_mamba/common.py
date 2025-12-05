@@ -121,8 +121,8 @@ class DummyWandb:
         pass
     def finish(self):
         pass
-    def watch(self, *args):
+    def watch(self, *args, **kwargs):
         pass
-    def log_artifact(self, *args):
+    def log_artifact(self, *args, **kwargs):
         pass
 
