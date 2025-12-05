@@ -3,7 +3,7 @@ import os
 import json
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 import torch
 import torch.nn as nn
@@ -115,13 +115,13 @@ class MixerConfig():
     fused_add_norm: bool = True
 
     # block config
-    ssm_cfg: Optional[dict] = field(default_factory=dict)
-    attn_layer_idx: Optional[list[int]] = field(default_factory=list)
-    attn_cfg: Optional[dict] = field(default_factory=dict)
+    ssm_cfg: Dict[str, Any] = field(default_factory=dict)
+    attn_layer_idx: List[int] = field(default_factory=list)
+    attn_cfg: Dict[str, Any] = field(default_factory=dict)
 
     # init
     use_llm_init: bool = True
-    llm_init_cfg: Optional[dict] = field(default_factory=dict)
+    llm_init_cfg: Dict[str, Any] = field(default_factory=dict)
 
     # for default sequence models
     d_input: Optional[int] = None
@@ -236,7 +236,7 @@ class MixerBackbone(nn.Module):
         return hidden_states
 
 class SequenceModel(nn.Module):
-    def __init__(self, cfg: MixerConfig):
+    def __init__(self, cfg: MixerConfig, device, dtype):
         super().__init__()
         self.cfg = cfg
 
@@ -253,9 +253,9 @@ class SequenceModel(nn.Module):
         state_dict = torch.load(model_file, map_location=device)
         load_result = model.load_state_dict(state_dict, strict=False)
 
-        if len(load_result.missing_keys > 0):
+        if len(load_result.missing_keys) > 0:
             print(f"Warning: Missing keys: {load_result.missing_keys}")
-        if len(load_result.unexpected_keys > 0):
+        if len(load_result.unexpected_keys) > 0:
             print(f"Warning: Unexpected keys: {load_result.unexpected_keys}")
 
         return model
@@ -307,7 +307,7 @@ class LinearSequenceModel(SequenceModel):
             x: (batch, seq, d_input)
 
         Returns:
-            y_hat: (batch, seq, 1)
+            y_hat: (batch, seq, d_output)
         """
         x = x.to(self.backbone.input_proj.weight.dtype)
         hidden_states = self.backbone(x)
@@ -346,6 +346,7 @@ class EmbeddingSequenceModel(SequenceModel):
 
         if vocab_size % pad_vocab_multiple != 0:
             vocab_size += pad_vocab_multiple - (vocab_size % pad_vocab_multiple)
+            self.cfg.vocab_size = vocab_size # sync back so when saving model, vocab_size is correct
 
         input_proj = nn.Embedding(vocab_size, d_model, **factory_kwargs)
         self.decoder = nn.Linear(d_model, vocab_size, bias=False, **factory_kwargs)
@@ -379,7 +380,7 @@ class EmbeddingSequenceModel(SequenceModel):
             tokens: (batch, seq) of type long
 
         Returns:
-            logits: (batch, seq, 1)
+            logits: (batch, seq, vocab_size)
         """
         hidden_states = self.backbone(tokens, inference_params=inference_params, **mixer_kwargs)
         if num_last_tokens > 0:
