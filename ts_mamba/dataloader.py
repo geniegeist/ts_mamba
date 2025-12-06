@@ -4,7 +4,7 @@ import yaml
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from ts_mamba.common import setup_default_logging
-from ts_mamba.dataset import TileTimeSeriesWindowedDataset
+from ts_mamba.dataset import TileTimeSeriesDataset, TileTimeSeriesWindowedDataset
 import polars as pl
 
 setup_default_logging()
@@ -82,7 +82,7 @@ def get_timeseries_dataloader(
     df = pl.read_parquet(parquet_path)
     with open(meta_path, "r") as f:
         meta = yaml.safe_load(f)
-    dataset = TileTimeSeriesWindowedDataset(
+    dataset = TileTimeSeriesDataset(
         df,
         meta=meta,
         context_length=context_length,
