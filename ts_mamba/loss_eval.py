@@ -1,3 +1,5 @@
+import logging
+import os
 from collections import namedtuple
 
 import torch
@@ -5,7 +7,14 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from tqdm.auto import tqdm
 
-from ts_mamba.common import get_dist_info
+from ts_mamba.common import get_dist_info, setup_default_logging
+
+
+setup_default_logging()
+logger = logging.getLogger(__name__)
+def log0(msg):
+    if int(os.environ.get("RANK", 0)) == 0:
+        logger.info(msg)
 
 
 def evaluate_forecast_base(model, criterion, loader, device, point_forecast_extractor=None):
@@ -64,6 +73,8 @@ def evaluate_forecast_base(model, criterion, loader, device, point_forecast_extr
     avgs = torch.zeros(6, device=device)
     has_data = stats[:,1] > 0
     avgs[has_data] = stats[has_data, 0] / stats[has_data, 1]
+
+    log0(f"Val result: {avgs.cpu()}")
 
     ValidationOutput = namedtuple("ValidationOutput", ["criterion", "mse", "l1", "l1_zero", "l1_gt0", "l1_gt1"])
     return ValidationOutput(*avgs.tolist())
