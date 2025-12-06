@@ -371,7 +371,7 @@ def main(config: Config):
                 (step, config.train.num_iterations, debiased_smooth_loss)
             )
 
-            if step % 20 == 0:
+            if step % 10 == 0:
                 wandb_run.log({
                     "train_loss": debiased_smooth_loss,
                     "lr": optimizer.param_groups[0]['lr']
