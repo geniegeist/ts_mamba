@@ -308,6 +308,7 @@ def main(config: Config):
                 scheduler_data=scheduler.state_dict(),
                 meta_data={
                     "step": step,
+                    "best_step": best_step,
                     "config": OmegaConf.to_container(config, resolve=True),
                     "loop_state": {
                         "min_val_loss": min_val_loss,
