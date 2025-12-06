@@ -286,8 +286,8 @@ class LinearSequenceModel(SequenceModel):
         device=None,
         dtype=None,
     ):
-        super().__init__(cfg=cfg)
         factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__(cfg=cfg, **factory_kwargs)
 
         d_model = cfg.d_model
         d_input = cfg.d_input
@@ -333,8 +333,8 @@ class EmbeddingSequenceModel(SequenceModel):
         device=None,
         dtype=None,
     ):
-        super().__init__(cfg=cfg)
         factory_kwargs = {"device": device, "dtype": dtype}
+        super().__init__(cfg=cfg, **factory_kwargs)
 
         d_model = cfg.d_model
         use_llm_init = cfg.use_llm_init
