@@ -17,6 +17,45 @@ try:
 except ImportError:
     RMSNorm, layer_norm_fn, rms_norm_fn = None, None, None
 
+class BlockWithDropout(Block):
+    def __init__(
+        self,
+        *args,
+        dropout_cls,
+        dropout: float = 0.1,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        self.dropout_mixer = dropout_cls(dropout)
+        self.dropout_mlp = dropout_cls(dropout) if self.mlp is not None else None
+
+        if self.fused_add_norm:
+            raise ValueError("Fused add norm is not supported in BlockWithDropout. Set fused_add_norm to False")
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        residual: Optional[torch.Tensor] = None,
+        inference_params=None,
+        **mixer_kwargs,
+    ):
+        residual = (hidden_states + residual) if residual is not None else hidden_states
+        hidden_states = self.norm(residual.to(dtype=self.norm.weight.dtype))
+        if self.residual_in_fp32:
+            residual = residual.to(torch.float32)
+        hidden_states = self.mixer(hidden_states, inference_params=inference_params, **mixer_kwargs)
+        hidden_states = self.dropout_mixer(hidden_states)
+
+        if self.mlp is not None:
+            residual = hidden_states + residual
+            hidden_states = self.norm2(residual.to(dtype=self.norm2.weight.dtype))
+            if self.residual_in_fp32:
+                residual = residual.to(torch.float32)
+            hidden_states = self.mlp(hidden_states)
+            hidden_states = self.dropout_mlp(hidden_states)
+
+        return hidden_states, residual
+
 def create_block(
     d_model,
     d_intermediate,
@@ -27,6 +66,7 @@ def create_block(
     rms_norm=False,
     residual_in_fp32=False,
     fused_add_norm=False,
+    dropout=0.1,
     layer_idx=None,
     device=None,
     dtype=None,
@@ -59,13 +99,18 @@ def create_block(
         mlp_cls = partial(
             GatedMLP, hidden_features=d_intermediate, out_features=d_model, **factory_kwargs
         )
-    block = Block(
+
+    dropout_cls = nn.Dropout
+
+    block = BlockWithDropout(
         d_model,
         mixer_cls,
         mlp_cls,
         norm_cls=norm_cls,
+        dropout_cls=dropout_cls,
         fused_add_norm=fused_add_norm,
         residual_in_fp32=residual_in_fp32,
+        dropout=dropout,
     )
     block.layer_idx = layer_idx
     return block
@@ -113,6 +158,7 @@ class MixerConfig():
     norm_epsilon: float = 1e-6
     residual_in_fp32: bool = True
     fused_add_norm: bool = True
+    dropout: float = 0.1
 
     # block config
     ssm_cfg: Dict[str, Any] = field(default_factory=dict)
@@ -161,6 +207,7 @@ class MixerBackbone(nn.Module):
         rms_norm = cfg.rms_norm
         norm_epsilon = cfg.norm_epsilon
         residual_in_fp32 = cfg.residual_in_fp32
+        dropout = cfg.dropout
         fused_add_norm = cfg.fused_add_norm
         llm_init_cfg = cfg.llm_init_cfg
         use_llm_init = cfg.use_llm_init
@@ -184,6 +231,7 @@ class MixerBackbone(nn.Module):
                 rms_norm=rms_norm,
                 residual_in_fp32=residual_in_fp32,
                 fused_add_norm=fused_add_norm,
+                dropout=dropout,
                 layer_idx=i,
                 **factory_kwargs,
             )

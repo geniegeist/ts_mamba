@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # -------------------- Model -------------------- #
 
@@ -16,6 +16,7 @@ class Model:
     norm_epsilon: float
     residual_in_fp32: bool
     fused_add_norm: bool
+    dropout: float
 
     # block config
     ssm_cfg: dict

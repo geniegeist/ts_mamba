@@ -76,6 +76,7 @@ def main(config: Config):
         fused_add_norm=config.model.fused_add_norm,
         ssm_cfg=config.model.ssm_cfg,
         attn_layer_idx=config.model.attn_layer_idx,
+        dropout=config.model.dropout,
         attn_cfg=config.model.attn_cfg,
         use_llm_init=config.model.use_llm_init,
         #llm_init_cfg=config.model.llm_init_cfg,
