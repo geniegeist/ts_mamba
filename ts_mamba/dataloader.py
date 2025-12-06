@@ -89,7 +89,7 @@ def get_timeseries_dataloader(
         use_features=use_covariates,
     )
     if distributed:
-        sampler = DistributedSampler(shuffle=shuffle)
+        sampler = DistributedSampler(dataset=dataset, shuffle=shuffle)
         dataloader = DataLoader(dataset, batch_size=batch_size, num_workers=num_workers, sampler=sampler)
     else:
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=num_workers)
