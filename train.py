@@ -79,7 +79,7 @@ def main(config: Config):
         attn_layer_idx=config.model.attn_layer_idx,
         attn_cfg=config.model.attn_cfg,
         use_llm_init=config.model.use_llm_init,
-        llm_init_cfg=config.model.llm_init_cfg,
+        #llm_init_cfg=config.model.llm_init_cfg,
         d_output=config.model.d_output,
         d_input=d_input,
         vocab_size=config.model.vocab_size,
