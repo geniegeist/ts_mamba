@@ -28,7 +28,7 @@ from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm2, plot_qua
 config_store = ConfigStore.instance()
 config_store.store(name="ts_mamba_config", node=Config)
 
-@hydra.main(version_base="1.3", config_path="../configs", config_name="config")
+@hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(config: Config):
     print0(OmegaConf.to_yaml(config, resolve=True))
 
