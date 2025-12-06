@@ -194,7 +194,6 @@ def main(config: Config):
     if not resuming:
         step = 0
         best_step = 0
-        tokens_so_far = 0
         min_val_loss = float("inf")
         smooth_train_loss = 0
     else:
@@ -203,7 +202,6 @@ def main(config: Config):
         loop_state = meta_data["loop_state"]
         min_val_loss = loop_state["min_val_loss"]
         smooth_train_loss = loop_state["smooth_train_loss"]
-        tokens_so_far = loop_state["tokens_so_far"]
 
 
     # -----------------------------------------------------------------------------
@@ -236,7 +234,6 @@ def main(config: Config):
 
     for step in pbar:
         last_step = step == config.train.num_iterations - 1
-        tokens_so_far += config.train.total_batch_size
 
         # once in a while: evaluate model
         if last_step or step % config.validate.validate_every == 0:
@@ -313,7 +310,6 @@ def main(config: Config):
                     "loop_state": {
                         "min_val_loss": min_val_loss,
                         "smooth_train_loss": smooth_train_loss,
-                        "tokens_so_far": tokens_so_far,
                     }
                 },
                 rank=ddp_rank,
@@ -373,7 +369,6 @@ def main(config: Config):
 
             if step % 20 == 0:
                 wandb_run.log({
-                    "tokens_so_far": tokens_so_far,
                     "train_loss": debiased_smooth_loss,
                     "lr": optimizer.param_groups[0]['lr']
                 })
