@@ -214,7 +214,7 @@ def plot_quantile(model, loader, device, wandb_run, epoch, q50_idx, q10_idx, q90
 
     truths = []
     with torch.no_grad():
-        for data in tqdm(loader, total=len(loader), leave=False, desc="Sample Batch index"):
+        for data in tqdm(loader, total=len(loader), desc="Sample"):
             obs, targets, tile_id, target_timestamp = data["context"], data["target"], data["tile_id"], data["target_timestamp"]
             obs = obs.to(device)
             preds = model(obs)

@@ -2,6 +2,16 @@ import polars as pl
 import torch
 from torch.utils.data import Dataset
 
+from ts_mamba.common import setup_default_logging
+import logging
+import os
+
+setup_default_logging()
+logger = logging.getLogger(__name__)
+def log0(message):
+    if int(os.environ.get("RANK", 0)) == 0:
+        logger.info(message)
+
 class TileTimeSeriesDataset(Dataset):
     def __init__(self, df: pl.DataFrame, meta: dict, context_length: int, use_features: bool):
         """
@@ -203,6 +213,7 @@ class TileTimeSeriesWindowedDataset(Dataset):
             )
 
             step = df["__dt__"][:-1].median()
+            log0(f"Step: {step}")
 
             df = df.with_columns(
                 (pl.col("__dt__") != step).fill_null(True).alias("__is_gap__")
