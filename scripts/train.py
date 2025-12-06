@@ -121,7 +121,9 @@ def main(config: Config):
         del model_data
 
     total_tokens = config.train.total_batch_size * config.train.num_iterations
-    print0(f"Total number of training tokens: {total_tokens:,}")
+    total_samples = total_tokens / context_length # samples are number of training token windows
+    print0(f"Total number of training tokens: {total_tokens:,}") 
+    print0(f"Total number of samples: {total_samples:,}")
     print0(f"Tokens : Params ratio: {config.train.total_batch_size * config.train.num_iterations / num_params:.2f}") # Chinchilla is ~20
 
     # -----------------------------------------------------------------------------
@@ -303,8 +305,10 @@ def main(config: Config):
                 step=step,
                 model_data=model.module.state_dict() if isinstance(model, DDP) else model.state_dict(),
                 optimizer_data=optimizer.state_dict(),
+                scheduler_data=scheduler.state_dict(),
                 meta_data={
                     "step": step,
+                    "best_step": best_step,
                     "config": OmegaConf.to_container(config, resolve=True),
                     "loop_state": {
                         "min_val_loss": min_val_loss,
