@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # -------------------- Model -------------------- #
 
@@ -24,7 +24,6 @@ class Model:
 
     # init
     use_llm_init: bool
-    llm_init_cfg: dict
 
     # for default sequence models
     d_output: int
@@ -36,6 +35,7 @@ class Model:
     pad_vocab_multiple: int
     # whether embedding and output projection layer should share the same weights
     tie_embeddings: bool
+
 
 # -------------------- Dataset -------------------- #
 
