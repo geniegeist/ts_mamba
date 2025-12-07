@@ -1,0 +1,39 @@
+defaults:
+  - base
+
+architecture: simple
+n_layer: 8 # transformer with eight attention blocks
+d_model: 512 # hidden dimension of attention blocks
+d_output: 9 # this is often overriden in the experiment config and depends on the loss function
+d_intermediate: 1536 # 3 x d_model, note: gpt2 uses a dimension expanstion of four
+
+# whether to use layer norm or rms norm. gpt2 used layer norm. 
+# nowadays it is more common to use rms norm for better training stability and speed
+rms_norm: True 
+norm_epsilon: 1e-06
+residual_in_fp32: False
+use_llm_init: True # whether to gpt2 initialization scheme. TODO: improve naming. 
+# whether to fuse the add and norm operation in the skip connection
+# currently, this is not supported with dropout. So, always set this to False.
+# TODO: Support dropout with fused_add_norm
+fused_add_norm: False
+dropout: 0.2
+
+# state space model config
+# since we don't use any Mamba2 blocks, we set this to null
+ssm_cfg:
+  headdim: 64 # num_heads = d_model/headdim = 512/64 = 8
+  d_state: 64 # number of parallel states per hidden dimension
+  expand: 2
+  d_conv: 4
+
+# attention config
+attn_layer_idx: # research suggests that a ratio of 1:7 (attention:mamba) is optimal
+- 4
+attn_cfg:
+  num_heads: 8 # head_dim = d_model/num_heads = 512/8 = 64
+  causal: True # apply causal masking to prevent data leakage in training
+  # RoPE embedding dimension to encode positional information.
+  # This is not so important when our timeseries input already contains 
+  # time covariates such as weekday, month, or time.
+  rotary_emb_dim: 64 

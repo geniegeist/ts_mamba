@@ -1,0 +1,57 @@
+defaults:
+  - /dataset: m5 # provide your dataset here
+  - /model: mamba_base
+
+model_tag: mamba_base
+model:
+  d_output: 9 # we have 9 quantiles (see train.loss.quantiles)
+
+train:
+  loss:
+    name: quantile
+    quantiles:
+      - 0.1
+      - 0.2
+      - 0.3
+      - 0.4
+      - 0.5
+      - 0.6
+      - 0.7
+      - 0.8
+      - 0.9
+  num_iterations: 1000 # one iteration = one accumulated gradient step
+  warmup_ratio: 0.01 # first 1% of 1000 iterations is a linear warm up 
+  device_batch_size: 64 # how many (context_length, d_model) samples one batch should contain
+
+  # total_batch_size = tokens processed per *effective* optimization step.
+  # One fwd/bwd pass per rank processes: device_batch_size * context_length tokens.
+  #
+  # Example:
+  #   context_length = 1024
+  #   device_batch_size = 64
+  #   → per-rank pass = 64 * 1024 = 65,536 tokens
+  #
+  # If total_batch_size = 65,536 * 4 = 262,144:
+  #   - 1 rank → 4 grad-accum steps
+  #   - 2 ranks → 2 grad-accum steps
+  #   - 4 ranks → 1 grad-accum step
+  total_batch_size: 262144
+  lr: 0.001
+  final_lr_frac: 0.05 # minimal lr = lr*final_lr_frac
+  weight_decay: 0.1 # adamw weight decay
+  grad_clip: 1.0
+
+validate:
+  type: quantile
+  quantile_10_idx: 1
+  quantile_90_idx: 9
+  quantile_point_forecast_idx: 7
+  batch_size: 64
+  eval_last_only: true # the quantile validation loss should only be evaluated on the last step
+
+sample:
+  type: quantile
+  quantile_10_idx: 1
+  quantile_90_idx: 9
+  quantile_point_forecast_idx: 7
+  batch_size: 64
