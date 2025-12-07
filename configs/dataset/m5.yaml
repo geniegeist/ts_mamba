@@ -1,0 +1,16 @@
+use_covariates: True
+# TODO: make time unit more generic
+context_window_in_days: 1
+
+train:
+  data: "m5_dataset.parquet"
+  meta: "m5_dataset_meta.yaml"
+  stride: 1
+
+sample:
+  data: "m5_dataset_sample.parquet"
+  meta: "m5_dataset_meta.yaml"
+
+validate:
+  data: "m5_dataset_validate.parquet"
+  meta: "m5_dataset_meta.yaml"

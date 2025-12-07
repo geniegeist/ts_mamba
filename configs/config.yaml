@@ -1,0 +1,26 @@
+defaults:
+  - _self_
+
+# Set `~wandb` or `wandb=null` or `wandb.mode=disabled` to disable logging
+wandb:
+  project: "ts_mamba"
+  group: ""
+  name: null # run name 
+  job_type: training
+  mode: online # choices=["online", "offline", "disabled"]
+  id: null # pass correct id to resume experiment
+
+# checkpoint
+load_optimizer: True
+save_every: 1000
+
+validate:
+  validate_every: 500
+  batch_size: 256
+
+sample:
+  sample_every: 1000
+  batch_size: 256
+
+num_workers: 1
+device: cuda
