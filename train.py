@@ -12,7 +12,6 @@ from omegaconf import OmegaConf
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import AdamW
 from tqdm.auto import tqdm
-from ts_mamba.quantile_model import QuantileRegressionLoss
 
 import wandb
 from config import Config
@@ -23,6 +22,7 @@ from ts_mamba.loss_eval import evaluate_point_forecast_model, evaluate_quantile_
 from ts_mamba.model import MixerConfig, LinearSequenceModel, EmbeddingSequenceModel
 from ts_mamba.optimizer import WarmupCosineLR 
 from ts_mamba.train_util import plot_forecast_vs_truth_rmse, plot_llm2, plot_quantile
+from ts_mamba.loss import QuantileRegressionLoss
 
 
 config_store = ConfigStore.instance()
