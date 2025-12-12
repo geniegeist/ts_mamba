@@ -42,6 +42,7 @@ def main(config: Config):
     use_dummy_wandb = (config.wandb is None) or not main_process
     wandb_config = OmegaConf.to_container(config.wandb, resolve=True) if config.wandb else {}
     wandb_config["name"] = config.model_tag
+    wandb_config["resume"] = "allow"
     wandb_run = DummyWandb() if use_dummy_wandb else wandb.init(
         **wandb_config,
         config=OmegaConf.to_container(config, resolve=True)
