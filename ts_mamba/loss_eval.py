@@ -88,7 +88,7 @@ def evaluate_quantile_model(model, criterion, quantile_idx, loader, device):
     def quantile_to_point(x): return x[..., quantile_idx].unsqueeze(-1)
     return evaluate_forecast_base(model=model, criterion=criterion, loader=loader, device=device, point_forecast_extractor=quantile_to_point)
 
-def evaluate_token_model(model, criterion, loader, device):
+def evaluate_token_model(model, criterion, loader, device, eval_last_only=False):
     def logits_to_expected_value(logits):
         probs = F.softmax(logits, dim=-1) # (batch, seq, vocab_size)
         vocab_indices = torch.arange(probs.size(-1), device=logits.device)
